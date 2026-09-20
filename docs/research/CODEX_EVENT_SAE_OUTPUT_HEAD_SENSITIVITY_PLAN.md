@@ -390,15 +390,16 @@ episode 길이 또는 특정 task의 token 수가 점수를 지배하지 않게 
 
 #### 7.2 Edit parity
 
-동일한 고정 입력/문맥에서 기존 hook의 feature edit와 offline reference edit가 같은 readout logits를 만드는지 확인한다.
+동일한 고정 입력/문맥에서 기존 hook의 feature edit가 full-forward reference와 같은 readout logits를 만드는지 확인한다.
 
 - alpha=1 identity.
 - 실제 활성 feature의 alpha=0.
 - inactive feature.
 - 적어도 첫 prediction forward와 후속 cached forward.
-- `ALL rows` original hook와 readout-only 계산의 차이를 확인한다.
+- `ALL rows` original hook와 full-group reference의 일치를 확인한다.
+- isolated-row SAE decode와 all-row decode의 차이는 별도 nonblocking 진단으로 기록한다.
 
-이 확인은 새로운 token-localization 연구가 아니다. **MVP의 offline score가 기존 hook과 같은 연산을 평가하는지 확인하는 구현 테스트**다. BatchTopK encode가 batch-dependent하면 original forward grouping을 유지한다.
+이 확인은 새로운 token-localization 연구가 아니다. **기존 hook의 구현이 full-forward reference와 일치하는지 확인하는 테스트**다. BatchTopK encode가 batch-dependent하면 original forward grouping을 유지한다. Offline score는 명시적인 isolated-row BF16 predictor이며 prefill hook과 exact-equivalent라고 주장하지 않는다. 핵심 실험은 이 predictor가 실제 all-row intervention 효과를 예측하는지 평가한다.
 
 새 연구의 런타임 검증 상태가 `not_run`, `stale` 또는 `failed`이면 full sweep을 시작하지 않는다.
 
@@ -798,12 +799,12 @@ scoring:
   primary_metric: head_full_vocab_kl_fixed_prefix
   logits_stage: raw_head
   edit_backend: reference
-  arithmetic_mode: runtime_matched
+  arithmetic_mode: isolated_row_bf16_reference_v1
   reduction_dtype: float32
   aggregation: equal_task_episode_step_dimension
   include_inactive_as_zero: true
   feature_universe: all_dictionary_features
-  pair_batch_size: 32
+  pair_batch_size: 1
   max_scored_pairs: 20000
   full_vocab: true
   save_per_row_logits: false
@@ -961,6 +962,7 @@ python scripts/openvla/output_head_sensitivity.py analyze \
 
 - local head의 baseline logits parity.
 - reference와 original hook의 edited readout logits parity.
+- isolated-row와 all-row SAE decode의 hidden/logit drift 진단(BF16 ULP 포함, nonblocking).
 - alpha=1에서 raw action sequence/성공 결과 일치.
 - alpha=0에서 target latent가 실제 제거되는지 확인.
 - 동일 초기 상태 hash 사용.

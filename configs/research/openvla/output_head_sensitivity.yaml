@@ -55,12 +55,12 @@ scoring:
   primary_metric: head_full_vocab_kl_fixed_prefix
   logits_stage: raw_head
   edit_backend: reference
-  arithmetic_mode: runtime_matched
+  arithmetic_mode: isolated_row_bf16_reference_v1
   reduction_dtype: float32
   aggregation: equal_task_episode_step_dimension
   include_inactive_as_zero: true
   feature_universe: all_dictionary_features
-  pair_batch_size: 32
+  pair_batch_size: 1
   max_scored_pairs: 20000
   max_working_memory_bytes: 536870912
   full_vocab: true

@@ -134,7 +134,7 @@ No environment rollout is used for this numerical check.
     from event_sae.openvla.activations import load_batch_topk_sae
     from event_sae.openvla.intervene import apply_resid_post_feature_perturb_hook
     from .head import (HEAD_PARITY_CHECKS, EDIT_PARITY_CHECKS, compare_logits,
-                       load_output_head, resolve_dtype)
+                       load_output_head, max_bfloat16_ulp_error, resolve_dtype)
     from .sensitivity import edit_feature_reference
 
     root = output_root(cfg)
@@ -190,7 +190,7 @@ No environment rollout is used for this numerical check.
         raise ValueError("Exported head bias differs from loaded runtime")
     tolerances = {key: cfg["validation"][key] for key in ("atol", "rtol", "max_argmax_mismatch")}
     generation = read_json(required_input(cfg, "generation_manifest"))
-    observations = []
+    observations, isolation_checks = [], []
     active_ids, inactive_ids = set(), None
     dictionary_size = None
     batch_checks, edit_batch_checks = [], []
@@ -214,13 +214,17 @@ No environment rollout is used for this numerical check.
                 active_ids.update(alive)
                 zero = set(torch.nonzero(torch.count_nonzero(z, dim=0) == 0).flatten().tolist())
                 inactive_ids = zero if inactive_ids is None else inactive_ids & zero
-                edited = flat[-1:]
-                # Certify the actual scoring batch shape and mixed feature-pair
-                # decode path against one-row references, not only batch size 1.
+                isolated_edit = flat[-1:]
+                # Compare the exported bundle with the live norm/head at the
+                # exact scoring shape. Comparing M=1 with M=N is invalid for
+                # BF16 CUDA GEMM even when every row is identical.
                 batch_size = cfg["scoring"]["pair_batch_size"]
-                rows = flat[-1:].expand(batch_size, -1).contiguous()
+                rows = flat[-1:].expand(batch_size, -1).contiguous().to(h.dtype)
                 batch_checks.append(compare_logits(
-                    head(flat[-1:]).expand(batch_size, -1), head(rows), **tolerances))
+                    head(rows),
+                    torch.nn.functional.linear(live.model.norm(rows), live.lm_head.weight,
+                                               live.lm_head.bias),
+                    **tolerances))
                 choices = sorted(alive) or [0]
                 features = torch.tensor([choices[i % len(choices)] for i in range(batch_size)], device=z.device)
                 encoded = z[-1:].expand(batch_size, -1).contiguous()
@@ -234,9 +238,62 @@ No environment rollout is used for this numerical check.
             else:
                 # Only selected z row goes into the offline readout reference;
                 # it came from encode of the original entire forward.
-                edited = edit_feature_reference(flat[-1:], sae, feature, alpha,
-                                                hidden_dtype=h.dtype, encoded=z[-1:])
-            current.update(expected=head(edited), rows=h.shape[-2],
+                isolated_edit = edit_feature_reference(flat[-1:], sae, feature, alpha,
+                                                       hidden_dtype=h.dtype, encoded=z[-1:])
+
+            # The live norm/head sees the complete prefill tensor. Core hook
+            # parity therefore uses the full-group edit and full forward shape.
+            if feature is None:
+                full_edit = flat.to(h.dtype)
+            else:
+                full_edit = edit_feature_reference(flat, sae, feature, alpha,
+                                                   hidden_dtype=h.dtype, encoded=z)
+            full_logits = head(full_edit.reshape_as(h)).reshape(-1, head.head_weight.shape[0])[-1:]
+
+            # Separately measure the isolated-row arithmetic used by offline
+            # scoring. It is a declared predictor rather than an exact copy of
+            # the all-row runtime hook, so divergence is reported but cannot
+            # satisfy or invalidate hook parity.
+            isolated_full = flat.to(h.dtype).clone()
+            isolated_full[-1:] = isolated_edit
+            isolated_full_logits = head(isolated_full.reshape_as(h)).reshape(
+                -1, head.head_weight.shape[0])[-1:]
+            isolated_scalar_logits = head(isolated_edit)
+            full_hidden = full_edit[-1:]
+            hidden_actual = isolated_edit.to(full_hidden.device)
+            hidden_finite = bool(torch.isfinite(full_hidden).all()
+                                 and torch.isfinite(hidden_actual).all())
+            hidden_error = (full_hidden.float() - hidden_actual.float()).abs()
+            hidden_close = hidden_finite and bool(torch.allclose(
+                full_hidden.float(), hidden_actual.float(),
+                atol=tolerances["atol"], rtol=tolerances["rtol"]))
+            differing = int(torch.count_nonzero(full_hidden != hidden_actual).item())
+            decoder_grouping = compare_logits(full_logits, isolated_full_logits, **tolerances)
+            projection_grouping = compare_logits(
+                isolated_full_logits, isolated_scalar_logits, **tolerances)
+            runtime_vs_score = compare_logits(full_logits, isolated_scalar_logits, **tolerances)
+            all_diagnostic_logits_pass = all(
+                item["status"] == "passed"
+                for item in (decoder_grouping, projection_grouping, runtime_vs_score))
+            isolation_checks.append({
+                "condition": name, "alpha": alpha, "feature_id": feature,
+                "row_count": h.shape[-2],
+                **runtime_vs_score,
+                "status": "passed" if hidden_close and all_diagnostic_logits_pass else "failed",
+                "logit_status": runtime_vs_score["status"],
+                "decoder_grouping": decoder_grouping,
+                "projection_grouping": projection_grouping,
+                "runtime_vs_score": runtime_vs_score,
+                "hidden_status": "passed" if hidden_close else "failed",
+                "hidden_finite": hidden_finite,
+                "hidden_exact_equal": differing == 0,
+                "hidden_differing_elements": differing,
+                "hidden_differing_fraction": differing / full_hidden.numel(),
+                "hidden_max_abs_error": float(hidden_error.max()) if hidden_finite else None,
+                "hidden_max_bfloat16_ulp_error": (
+                    max_bfloat16_ulp_error(full_hidden, hidden_actual) if hidden_finite else None),
+            })
+            current.update(expected=full_logits, rows=h.shape[-2],
                            active=feature is not None and bool(z[-1, feature] != 0))
 
         def after_head(_module, _inputs, output):
@@ -315,7 +372,22 @@ No environment rollout is used for this numerical check.
             "sample_identity": sha256_file(fixture_path), "observations": len(observations),
             "model_action_queries": len(calls) * 4, "elapsed_seconds": time.perf_counter() - started}
     head_report = {**base, "checks": {"baseline_logits": check(baseline), "head_batch_shape": check(batch_checks)}}
-    edit_report = {**base, "checks": checks}
+    edit_report = {
+        **base,
+        "checks": checks,
+        "diagnostics": {
+            "isolated_score_vs_runtime": {
+                **check(isolation_checks),
+                "required": False,
+                "arithmetic_mode": cfg["scoring"]["arithmetic_mode"],
+                "interpretation": (
+                    "Separately reports SAE decoder grouping drift, output-head projection grouping "
+                    "drift, and their combined runtime-versus-score drift; this predictor diagnostic "
+                    "is not a runtime parity gate."
+                ),
+            }
+        },
+    }
     for report, names, filename in ((head_report, HEAD_PARITY_CHECKS, "runtime_parity.json"),
                                     (edit_report, EDIT_PARITY_CHECKS, "edit_parity.json")):
         report["status"] = "passed" if all(report["checks"][key]["status"] == "passed" for key in names) else "failed"

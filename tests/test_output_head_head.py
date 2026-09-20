@@ -11,7 +11,7 @@ from safetensors.torch import save_file
 from event_sae.research.output_head.head import (
     EDIT_PARITY_CHECKS, ExactRMSNorm, OutputHeadBundle, compare_logits,
     _resolve_snapshot_text_config, decode_action_bins, export_local_output_head, load_output_head,
-    validate_parity_report,
+    max_bfloat16_ulp_error, validate_parity_report,
 )
 from event_sae.research.output_head.provenance import fingerprint
 
@@ -199,6 +199,40 @@ def test_parity_comparison_keeps_fixed_tolerances_and_rejects_nonfinite():
     assert report["status"] == "failed"  # numerical allowance doesn't erase token flips
     assert report["argmax_mismatch_rate"] == 1
     assert compare_logits(base, base * float("nan"), atol=0, rtol=0)["finite"] is False
+
+
+def test_bfloat16_ulp_distance_is_diagnostic_only():
+    same = torch.tensor([16.0, -16.0, 0.0], dtype=torch.bfloat16)
+    assert max_bfloat16_ulp_error(same, same.clone()) == 0
+    assert max_bfloat16_ulp_error(
+        torch.tensor([16.0], dtype=torch.bfloat16),
+        torch.tensor([16.125], dtype=torch.bfloat16),
+    ) == 1
+    assert max_bfloat16_ulp_error(
+        torch.tensor([32.0], dtype=torch.bfloat16),
+        torch.tensor([32.25], dtype=torch.bfloat16),
+    ) == 1
+    assert max_bfloat16_ulp_error(
+        torch.tensor([-16.0], dtype=torch.bfloat16),
+        torch.tensor([-16.125], dtype=torch.bfloat16),
+    ) == 1
+    assert max_bfloat16_ulp_error(
+        torch.tensor([-0.0], dtype=torch.bfloat16),
+        torch.tensor([0.0], dtype=torch.bfloat16),
+    ) == 0
+    assert max_bfloat16_ulp_error(torch.tensor([1.0]), torch.tensor([1.0])) is None
+    assert max_bfloat16_ulp_error(
+        torch.tensor([float("inf")], dtype=torch.bfloat16),
+        torch.tensor([float("inf")], dtype=torch.bfloat16),
+    ) is None
+
+    comparison = compare_logits(
+        torch.tensor([[16.0]], dtype=torch.bfloat16),
+        torch.tensor([[16.125]], dtype=torch.bfloat16),
+        atol=1e-4, rtol=1e-4,
+    )
+    assert comparison["status"] == "failed"
+    assert comparison["max_bfloat16_ulp_error"] == 1
 
 
 def test_parity_certificate_binds_identity_tolerances_and_required_checks():

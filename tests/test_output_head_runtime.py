@@ -136,7 +136,13 @@ def fake_runtime(monkeypatch, tmp_path):
 
 def test_validate_runtime_calls_actual_legacy_hook_and_covers_all_checks(fake_runtime):
     f = fake_runtime
-    result = runtime.validate_runtime(f.cfg)
+    head_input_shapes = []
+    shape_hook = f.head.register_forward_pre_hook(
+        lambda _module, args: head_input_shapes.append(tuple(args[0].shape)))
+    try:
+        result = runtime.validate_runtime(f.cfg)
+    finally:
+        shape_hook.remove()
     assert result["status"] == "passed"
     assert len(f.loads) == 1
     assert f.model.query_count == 4 and f.model.forward_count == 28
@@ -150,6 +156,14 @@ def test_validate_runtime_calls_actual_legacy_hook_and_covers_all_checks(fake_ru
     assert set(baseline["checks"]) == set(HEAD_PARITY_CHECKS)
     assert set(edited["checks"]) == set(EDIT_PARITY_CHECKS)
     assert all(item["status"] == "passed" for item in edited["checks"].values())
+    assert (1, 3, 2) in head_input_shapes  # full prefill shape, not only its final row
+    isolated = edited["diagnostics"]["isolated_score_vs_runtime"]
+    assert isolated["required"] is False and isolated["num_forwards"] == 28
+    assert all("hidden_max_abs_error" in row for row in isolated["comparisons"])
+    assert all("hidden_max_bfloat16_ulp_error" in row for row in isolated["comparisons"])
+    assert all("decoder_grouping" in row for row in isolated["comparisons"])
+    assert all("projection_grouping" in row for row in isolated["comparisons"])
+    assert all("runtime_vs_score" in row for row in isolated["comparisons"])
     assert edited["checks"]["prefill"]["num_forwards"] == 3
     assert edited["checks"]["cached"]["num_forwards"] == 18
     assert not f.model.language_model.model.layers[0]._forward_hooks

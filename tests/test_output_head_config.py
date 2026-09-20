@@ -45,7 +45,8 @@ def test_legacy_fingerprint_omits_new_default_fields():
 
 @pytest.mark.parametrize("updates", [
     {"typo": 1}, {"model": {"allow_download": True}},
-    {"scoring": {"pair_batch_size": 0}}, {"scoring": {"alpha": .5}},
+    {"scoring": {"pair_batch_size": 0}}, {"scoring": {"pair_batch_size": 2}},
+    {"scoring": {"alpha": .5}},
     {"rollout": {"require_head_parity": False}}, {"scope": {"retrain_sae": True}},
     {"sampling": {"task_ids": [0, 0]}}, {"output": {"overwrite": True}},
     {"scoring": {"max_scored_pairs": True}},

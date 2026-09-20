@@ -159,7 +159,7 @@ def score_features(readout_cache: Mapping[str, Any] | str | Path, head_bundle: O
                     "code_revision": head_bundle.manifest.get("code_revision"),
                     "layer_idx": head_bundle.manifest.get("target_layer"),
                     "encoder_grouping": cache["encoder_grouping"],
-                    "pair_batch_size": config.get("pair_batch_size", 32)}
+                    "pair_batch_size": config.get("pair_batch_size", 1)}
         if any(value is None or identity.get(key) != value for key, value in expected.items()):
             raise ValueError("Current parity identity does not describe the actual scoring bundle/cache")
     if config.get("edit_backend", "reference") != "reference":
@@ -170,8 +170,9 @@ def score_features(readout_cache: Mapping[str, Any] | str | Path, head_bundle: O
         raise ValueError("Unsupported aggregation")
     if config.get("include_inactive_as_zero", True) is not True:
         raise ValueError("Inactive readouts must remain in every feature denominator")
-    if config.get("arithmetic_mode", "runtime_matched") != "runtime_matched":
-        raise ValueError("This reference scorer preserves runtime arithmetic")
+    arithmetic_mode = config.get("arithmetic_mode", "isolated_row_bf16_reference_v1")
+    if arithmetic_mode != "isolated_row_bf16_reference_v1":
+        raise ValueError("This scorer requires the explicit isolated-row BF16 reference protocol")
     reduction_dtype = resolve_dtype(config.get("reduction_dtype", "float32"))
     if reduction_dtype not in (torch.float32, torch.float64):
         raise ValueError("KL reduction must use FP32 or FP64")
@@ -181,9 +182,11 @@ def score_features(readout_cache: Mapping[str, Any] | str | Path, head_bundle: O
     alpha = float(config.get("alpha", 0.0))
     if not math.isfinite(alpha):
         raise ValueError("alpha must be finite")
-    batch_size, maximum = config.get("pair_batch_size", 32), config.get("max_scored_pairs", 20000)
+    batch_size, maximum = config.get("pair_batch_size", 1), config.get("max_scored_pairs", 20000)
     if any(isinstance(v, bool) or not isinstance(v, int) or v < 1 for v in (batch_size, maximum)):
         raise ValueError("Batch size and pair budget must be positive integers")
+    if not synthetic and batch_size != 1:
+        raise ValueError("Real isolated-row reference scoring requires pair_batch_size=1")
     selected = config.get("feature_universe", "all_dictionary_features")
     if selected == "all_dictionary_features":
         features, universe = list(range(dict_size)), "all_dictionary_features"
@@ -317,4 +320,4 @@ def score_features(readout_cache: Mapping[str, Any] | str | Path, head_bundle: O
                             "action_decoding_status": "available" if has_action else "unavailable",
                             "action_decoding_reason": None if has_action else "verified action decoding metadata absent",
                             "encoder_grouping": cache["encoder_grouping"],
-                            "arithmetic_mode": "runtime_matched", "edit_backend": "reference"}}
+                            "arithmetic_mode": arithmetic_mode, "edit_backend": "reference"}}

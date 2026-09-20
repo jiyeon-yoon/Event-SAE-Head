@@ -198,6 +198,16 @@ Head/edit parity는 baseline logits, 실제 all-row hook, 첫/cached forward와 
 batch shape를 비교한다. 모델·head·SAE·mapping·dtype·backend·허용오차·관련 코드가 바뀌면
 오래된 passed를 사용하지 않는다. 수치 허용오차는 실패를 감추려고 자동 확대하지 않는다.
 
+실데이터 pilot의 scoring은 `isolated_row_bf16_reference_v1`과
+`pair_batch_size: 1`을 고정한다. 이는 cached action forward와 같은 한-row BF16
+norm/head 연산이다. prefill 전체-row hook과 isolated-row SAE decode의 차이는
+`diagnostics.isolated_score_vs_runtime`에 nonblocking 진단으로 기록한다. 이 진단은 SAE
+decoder grouping, output-head projection grouping, 두 차이를 합친 runtime-vs-score 오차를
+각각 분리한다. 따라서 offline score를
+prefill runtime logits와 수치적으로 동일하다고 주장하지 않고, **isolated-row score가 실제
+all-row intervention의 효과를 예측하는지**를 후속 실험에서 검증한다. 서로 다른 BF16
+연산 grouping이 같아야 한다고 가정하거나 그 차이를 전역 허용오차 확대로 숨기지 않는다.
+
 `plan`은 top-K union을 자르지 않고 deduplicate 후 실제 rollout 수를 계산한다.
 현재 native runner는 raw 1개 + unique features + identity 1개를 같은 전체 평가 case에서
 수행한다. 예산 초과는 `blocked-<hash>.json`으로 남기고 실행하지 않는다. 이때 예산을

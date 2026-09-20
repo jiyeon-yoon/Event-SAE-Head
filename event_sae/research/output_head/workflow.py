@@ -318,6 +318,32 @@ def numerical_identity(cfg: dict) -> dict:
                           ("target_layer", cfg["scope"]["layer_idx"])):
         if head_manifest.get(key, head_manifest.get("metadata", {}).get(key)) != expected:
             raise ValueError(f"Head identity does not match current config: {key}")
+    cuda_matmul = getattr(getattr(torch.backends, "cuda", None), "matmul", None)
+    cuda_device_identity = None
+    if str(cfg["scoring"]["device"]).startswith("cuda"):
+        if not torch.cuda.is_available():
+            raise ValueError("CUDA scoring was requested but CUDA is unavailable")
+        requested = torch.device(cfg["scoring"]["device"])
+        index = requested.index if requested.index is not None else torch.cuda.current_device()
+        properties = torch.cuda.get_device_properties(index)
+        cuda_device_identity = {
+            "index": index,
+            "name": properties.name,
+            "compute_capability": [properties.major, properties.minor],
+            "total_memory": properties.total_memory,
+        }
+    numerical_backend = {
+        "float32_matmul_precision": torch.get_float32_matmul_precision(),
+        "deterministic_algorithms": torch.are_deterministic_algorithms_enabled(),
+        "cuda_allow_tf32": (bool(cuda_matmul.allow_tf32)
+                            if cuda_matmul is not None and hasattr(cuda_matmul, "allow_tf32")
+                            else "unavailable"),
+        "cuda_allow_bf16_reduced_precision_reduction": (
+            bool(cuda_matmul.allow_bf16_reduced_precision_reduction)
+            if cuda_matmul is not None and hasattr(cuda_matmul, "allow_bf16_reduced_precision_reduction")
+            else "unavailable"),
+        "cuda_device": cuda_device_identity,
+    }
     return {
         "model_revision": cfg["model"]["revision"], "code_revision": cfg["model"]["code_revision"],
         "model_checkpoint": cfg["model"]["checkpoint"], "unnorm_key": cfg["model"]["unnorm_key"],
@@ -327,6 +353,7 @@ def numerical_identity(cfg: dict) -> dict:
         "attention_backend": "sdpa", "torch_version": str(torch.__version__),
         "transformers_version": str(transformers.__version__),
         "device": cfg["scoring"]["device"], "cuda_build": str(torch.version.cuda),
+        "numerical_backend": numerical_backend,
         "processor_identity": head_manifest.get("processor_identity", head_manifest.get("metadata", {}).get("processor_identity")),
         "head_manifest_hash": sha256_file(head_dir / "output_head_manifest.json"),
         "head_weights_hash": sha256_file(head_dir / "output_head.safetensors"),

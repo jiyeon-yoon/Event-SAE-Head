@@ -23,7 +23,8 @@ from .provenance import atomic_write_json, fingerprint, read_json, sha256_file
 SCHEMA = "output_head_bundle_v1"
 NORM_IMPLEMENTATION = "llama_rms_norm_v1"
 HEAD_PARITY_CHECKS = ("baseline_logits", "head_batch_shape")
-EDIT_PARITY_CHECKS = ("alpha1", "active_alpha0", "inactive", "prefill", "cached", "all_rows", "pair_batch_edit")
+EDIT_PARITY_CHECKS = ("alpha1", "active_alpha0", "inactive", "prefill", "cached", "all_rows",
+                      "pair_batch_edit")
 DTYPES = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16,
           "float64": torch.float64}
 
@@ -370,7 +371,8 @@ def compare_logits(reference: torch.Tensor, actual: torch.Tensor, *, atol: float
         raise ValueError("Invalid parity tolerances")
     if reference.shape != actual.shape or reference.ndim < 2 or reference.numel() == 0:
         raise ValueError("Parity logits must have identical nonempty shapes")
-    ref, value = reference.float(), actual.to(reference.device).float()
+    aligned = actual.to(reference.device)
+    ref, value = reference.float(), aligned.float()
     finite = bool(torch.isfinite(ref).all() and torch.isfinite(value).all())
     error = (ref - value).abs()
     mismatch = float((ref.argmax(-1) != value.argmax(-1)).float().mean()) if finite else None
@@ -378,8 +380,29 @@ def compare_logits(reference: torch.Tensor, actual: torch.Tensor, *, atol: float
     passed = close and mismatch <= max_argmax_mismatch
     return {"status": "passed" if passed else "failed", "finite": finite,
             "max_abs_error": float(error.max()) if finite else None,
+            "max_bfloat16_ulp_error": max_bfloat16_ulp_error(reference, aligned) if finite else None,
             "argmax_mismatch_rate": mismatch, "shape": list(ref.shape),
             "atol": atol, "rtol": rtol, "max_argmax_mismatch": max_argmax_mismatch}
+
+
+def max_bfloat16_ulp_error(reference: torch.Tensor, actual: torch.Tensor) -> int | None:
+    """Maximum representable-step distance for finite BF16 tensors.
+
+    This is diagnostic only; ``compare_logits`` still uses the configured
+    absolute/relative tolerances and never grants an automatic ULP exemption.
+    """
+    if (reference.shape != actual.shape or reference.dtype != torch.bfloat16
+            or actual.dtype != torch.bfloat16):
+        return None
+    if not bool(torch.isfinite(reference).all() and torch.isfinite(actual).all()):
+        return None
+
+    def ordered(value: torch.Tensor) -> torch.Tensor:
+        bits = value.contiguous().view(torch.int16).to(torch.int32) & 0xFFFF
+        magnitude = bits & 0x7FFF
+        return torch.where((bits & 0x8000) != 0, 0x8000 - magnitude, 0x8000 + magnitude)
+
+    return int((ordered(reference) - ordered(actual)).abs().max().item())
 
 
 def validate_parity_report(report: Mapping[str, Any], current_identity: Mapping[str, Any],
