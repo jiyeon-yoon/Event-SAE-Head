@@ -10,7 +10,7 @@ from safetensors.torch import save_file
 
 from event_sae.research.output_head.head import (
     EDIT_PARITY_CHECKS, ExactRMSNorm, OutputHeadBundle, compare_logits,
-    decode_action_bins, export_local_output_head, load_output_head,
+    _resolve_snapshot_text_config, decode_action_bins, export_local_output_head, load_output_head,
     validate_parity_report,
 )
 from event_sae.research.output_head.provenance import fingerprint
@@ -86,6 +86,58 @@ def test_local_export_only_reads_named_shards_and_hashes_bundle(tmp_path):
         stream.write(b"tampered")
     with pytest.raises(ValueError, match="weights hash"):
         load_output_head(out)
+
+
+def test_sparse_openvla_llama_config_uses_config_defaults_with_provenance(tmp_path):
+    source = _snapshot(tmp_path)
+    config_path = source / "config.json"
+    config_path.write_text(json.dumps({
+        "model_type": "openvla",
+        "llm_backbone_id": "llama2-7b-pure",
+        "hf_llm_id": "meta-llama/Llama-2-7b-hf",
+        "transformers_version": "4.40.1",
+        "text_config": {"model_type": "llama", "hidden_size": 3, "vocab_size": 5},
+    }))
+    original = config_path.read_bytes()
+    metadata = _metadata(target_layer=31, num_layers=32,
+                         norm={"implementation": "llama_rms_norm_v1", "eps": 1e-6})
+    manifest = export_local_output_head(
+        source, tmp_path / "head", metadata=metadata,
+        norm_spec=metadata["norm"],
+    )
+    resolution = manifest["text_config_resolution"]
+    assert resolution["mode"] == "transformers_llama_config_defaults"
+    assert resolution["defaulted_fields"] == ["num_hidden_layers", "rms_norm_eps"]
+    assert resolution["resolved_num_hidden_layers"] == 32
+    assert resolution["resolved_rms_norm_eps"] == 1e-6
+    assert resolution["resolved_hidden_size"] == 3
+    assert resolution["resolved_vocab_size"] == 5
+    assert resolution["snapshot_transformers_version"] == "4.40.1"
+    assert config_path.read_bytes() == original
+
+
+def test_sparse_openvla_resolution_preserves_explicit_values_and_records_all_defaults():
+    resolved, provenance = _resolve_snapshot_text_config({
+        "model_type": "openvla",
+        "llm_backbone_id": "llama2-7b-pure",
+        "hf_llm_id": "meta-llama/Llama-2-7b-hf",
+        "text_config": {"model_type": "llama", "rms_norm_eps": 2e-5, "vocab_size": 32064},
+    })
+    assert resolved["num_hidden_layers"] == 32
+    assert resolved["rms_norm_eps"] == 2e-5
+    assert resolved["hidden_size"] == 4096
+    assert provenance["defaulted_fields"] == ["num_hidden_layers", "hidden_size"]
+    assert provenance["resolved_hidden_size"] == 4096
+
+
+def test_sparse_unknown_text_config_is_not_guessed(tmp_path):
+    source = _snapshot(tmp_path)
+    (source / "config.json").write_text(json.dumps({
+        "model_type": "unknown", "text_config": {"model_type": "unknown"},
+    }))
+    with pytest.raises(ValueError, match="supported only for the verified OpenVLA"):
+        export_local_output_head(source, tmp_path / "head", metadata=_metadata(),
+                                 norm_spec=_metadata()["norm"])
 
 
 def test_unknown_tied_weights_or_unverified_norm_are_not_guessed(tmp_path):

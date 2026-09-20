@@ -28,6 +28,58 @@ DTYPES = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.
           "float64": torch.float64}
 
 
+def _resolve_snapshot_text_config(config: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Resolve only the defaults used by the pinned OpenVLA Llama config.
+
+    The LIBERO Spatial snapshot serializes a deliberately sparse ``text_config``.
+    OpenVLA reconstructs the omitted values by instantiating ``LlamaConfig``;
+    mirror that config-only operation without loading model code or weights.
+    Unknown sparse architectures remain an error rather than being guessed.
+    """
+    text_config = config.get("text_config", config)
+    if not isinstance(text_config, Mapping):
+        raise ValueError("Local text_config must be a mapping")
+    resolved = dict(text_config)
+    required = ("num_hidden_layers", "rms_norm_eps")
+    missing = [name for name in required if name not in resolved]
+    if not missing:
+        return resolved, {"mode": "explicit_snapshot_fields", "defaulted_fields": []}
+
+    supported_openvla_llama = (
+        config.get("model_type") == "openvla"
+        and config.get("llm_backbone_id") == "llama2-7b-pure"
+        and config.get("hf_llm_id") == "meta-llama/Llama-2-7b-hf"
+        and resolved.get("model_type") == "llama"
+    )
+    if not supported_openvla_llama:
+        names = ", ".join(missing)
+        raise ValueError(
+            f"Local text config lacks {names}; defaults are supported only for the verified "
+            "OpenVLA llama2-7b-pure configuration"
+        )
+
+    # Lazy and config-only: this neither executes HF remote code nor loads a model.
+    import transformers
+    from transformers.models.llama.configuration_llama import LlamaConfig
+
+    resolved_fields = ("num_hidden_layers", "rms_norm_eps", "hidden_size", "vocab_size")
+    defaulted = [name for name in resolved_fields if name not in resolved]
+    llama = LlamaConfig(**resolved)
+    for name in resolved_fields:
+        resolved[name] = getattr(llama, name)
+    provenance = {
+        "mode": "transformers_llama_config_defaults",
+        "defaulted_fields": defaulted,
+        "resolved_num_hidden_layers": int(llama.num_hidden_layers),
+        "resolved_rms_norm_eps": float(llama.rms_norm_eps),
+        "resolved_hidden_size": int(llama.hidden_size),
+        "resolved_vocab_size": int(llama.vocab_size),
+        "transformers_version": transformers.__version__,
+        "snapshot_transformers_version": config.get("transformers_version"),
+    }
+    return resolved, provenance
+
+
 def resolve_dtype(value: str | torch.dtype) -> torch.dtype:
     """Resolve an explicit floating dtype without choosing a device."""
     if isinstance(value, torch.dtype):
@@ -175,18 +227,30 @@ def export_local_output_head(source: str | Path | object, output_dir: str | Path
             raise ValueError("Snapshot export requires an explicit verified norm_spec")
         config_path = snapshot / "config.json"
         config = read_json(config_path)
-        text_config = config.get("text_config", config)
+        text_config, text_config_resolution = _resolve_snapshot_text_config(config)
         layers = text_config.get("num_hidden_layers")
-        if not isinstance(layers, int):
+        if isinstance(layers, bool) or not isinstance(layers, int) or layers < 1:
             raise ValueError("Local text config lacks num_hidden_layers")
         meta["num_layers"] = layers
-        if float(text_config.get("rms_norm_eps", float("nan"))) != float(norm_spec["eps"]):
+        eps = text_config.get("rms_norm_eps")
+        if isinstance(eps, bool) or not isinstance(eps, (int, float)) or not math.isfinite(float(eps)):
+            raise ValueError("Local text config lacks a finite rms_norm_eps")
+        if float(eps) != float(norm_spec["eps"]):
             raise ValueError("Norm epsilon disagrees with local text config")
         keys = dict(tensor_keys or {"norm_weight": "language_model.model.norm.weight",
                                    "head_weight": "language_model.lm_head.weight"})
         if not {"norm_weight", "head_weight"}.issubset(keys) or set(keys) - {"norm_weight", "head_weight", "head_bias"}:
             raise ValueError("Explicit tensor keys must identify norm_weight and head_weight")
         tensors, source_hashes = _snapshot_tensors(snapshot, keys)
+        if tensors["norm_weight"].ndim != 1 or tensors["head_weight"].ndim != 2:
+            raise ValueError("Output-head tensors must be a norm vector and head matrix")
+        hidden_size, vocab_size = text_config.get("hidden_size"), text_config.get("vocab_size")
+        if isinstance(hidden_size, int) and (
+                tensors["norm_weight"].numel() != hidden_size
+                or tensors["head_weight"].shape[1] != hidden_size):
+            raise ValueError("Resolved text hidden_size disagrees with output-head tensors")
+        if isinstance(vocab_size, int) and tensors["head_weight"].shape[0] != vocab_size:
+            raise ValueError("Resolved text vocab_size disagrees with output-head tensor")
         # Loading a checkpoint can cast FP32 disk weights to BF16. Reproduce
         # that cast only when the caller has explicitly identified each
         # runtime weight dtype; never infer it solely from hidden dtype.
@@ -198,6 +262,7 @@ def export_local_output_head(source: str | Path | object, output_dir: str | Path
         source_hashes["config.json"] = sha256_file(config_path)
         meta["source_kind"] = "local_safetensors"
         meta["tensor_keys"] = keys
+        meta["text_config_resolution"] = text_config_resolution
         if (snapshot / "generation_config.json").is_file():
             meta["generation_config"] = read_json(snapshot / "generation_config.json")
             source_hashes["generation_config.json"] = sha256_file(snapshot / "generation_config.json")

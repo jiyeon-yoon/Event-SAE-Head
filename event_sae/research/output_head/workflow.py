@@ -168,6 +168,7 @@ def numerical_identity(cfg: dict) -> dict:
     """Build current identity from real files and implementation, never old reports."""
     from .readouts import MAPPING_VERSION
     import torch
+    import transformers
     from event_sae.openvla.eval.config import load_config as load_eval_config
     from dictionary_learning.trainers.batch_top_k import BatchTopKSAE
     weights, sae_config = _sae_paths(cfg)
@@ -202,6 +203,7 @@ def numerical_identity(cfg: dict) -> dict:
         "local_snapshot_identity": snapshot_identity,
         "local_snapshot_verification_level": "metadata_and_head_content_hashes_not_full_weight_rescan",
         "attention_backend": "sdpa", "torch_version": str(torch.__version__),
+        "transformers_version": str(transformers.__version__),
         "device": cfg["scoring"]["device"], "cuda_build": str(torch.version.cuda),
         "processor_identity": head_manifest.get("processor_identity", head_manifest.get("metadata", {}).get("processor_identity")),
         "head_manifest_hash": sha256_file(head_dir / "output_head_manifest.json"),
