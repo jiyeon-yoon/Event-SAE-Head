@@ -1,0 +1,120 @@
+# Copy to configs/local/head.yaml and fill verified local paths.
+# All paths are resolved relative to the process working directory (repo root).
+# M0-M3: CPU-only audit/plan/tests. No model download is allowed.
+schema_version: output_head_sensitivity_v1
+experiment_name: openvla_l31_fixed_prefix_head_sensitivity
+scope:
+  model_family: openvla
+  suite: libero_spatial
+  layer_idx: 31
+  capture_target: post_mlp_residual
+  require_final_decoder_layer: true
+  retrain_sae: false
+  recollect_discovery: false
+  collect_extended_env_state: false
+inputs:
+  dense_dir: null
+  source_episode_manifest: null
+  sae_checkpoint: null
+  event_scores_path: null
+  existing_candidates_path: null
+  existing_result_dirs: []
+  local_model_snapshot: null
+  output_head_bundle: null
+  generation_manifest: null
+  head_export_metadata: null
+  runtime_inputs: null
+model:
+  checkpoint: openvla/openvla-7b-finetuned-libero-spatial
+  revision: 962318cec55ac10993ff0f5f43eda9a270b4c873
+  code_revision: 47a0ec7fc4ec123775a391911046cf33cf9ed83f
+  unnorm_key: libero_spatial
+  expected_live_hidden_dtype: bfloat16
+  allow_download: false
+splits:
+  split_seed: 2026
+  discovery_per_task: 35
+  validation_per_task: 5
+  evaluation_per_task: 10
+  require_initial_state_disjoint: true
+  evaluation_labels_previously_used: null
+sampling:
+  mode: pilot
+  split_manifest: null
+  sample_seed: 2026
+  task_ids:
+  - 0
+  - 1
+  max_episodes_per_task: 2
+  max_steps_per_episode: 8
+  step_selection: evenly_spaced
+  require_complete_action_query: true
+  require_frozen_eval_before_pilot: true
+scoring:
+  alpha: 0.0
+  primary_metric: head_full_vocab_kl_fixed_prefix
+  logits_stage: raw_head
+  edit_backend: reference
+  arithmetic_mode: runtime_matched
+  reduction_dtype: float32
+  aggregation: equal_task_episode_step_dimension
+  include_inactive_as_zero: true
+  feature_universe: all_dictionary_features
+  pair_batch_size: 32
+  max_scored_pairs: 20000
+  max_working_memory_bytes: 536870912
+  full_vocab: true
+  save_per_row_logits: false
+  device: cpu
+  negative_tolerance: 1.0e-06
+selection:
+  methods:
+  - event_aligned
+  - head_full_vocab_kl_fixed_prefix
+  - mean_readout_activation
+  - readout_activation_frequency
+  top_k: 3
+  random_audit_features: 6
+  random_seed: 2026
+  topk_tie_break: feature_id_ascending
+  audit_population: discovery_readout_alive
+  audit_sampling: uniform_without_replacement
+  audit_overlap_policy: keep_memberships_no_redraw
+  max_unique_features: 24
+  require_all_method_topk: true
+rollout:
+  execute: false
+  env_seed: 0
+  alpha: 0.0
+  hook_start_step: 0
+  eval_manifest: null
+  base_eval_config: configs/reproduction/openvla/libero_spatial_intervention_layer31.yaml
+  max_total_rollouts: 100
+  require_clean_git: true
+  require_head_parity: true
+  require_edit_parity: true
+  require_current_parity_fingerprint: true
+  require_identity_check: true
+  save_actions_for_identity: true
+  save_video: false
+  save_trajectory_records: false
+  collect_activations: false
+validation:
+  atol: 0.0001
+  rtol: 0.0001
+  max_argmax_mismatch: 0.0
+  max_model_calls: 8
+analysis:
+  primary_label: success_rate_drop
+  bootstrap_replicates: 2000
+  bootstrap_seed: 2026
+  confidence_level: 0.95
+  allow_missing_pairs: false
+  require_declared_selection_eval_overlap: true
+  secondary_labels:
+  - outcome_switch_rate
+  report_outcome_transition_counts: true
+output:
+  root_dir: null
+  overwrite: false
+  resume: true

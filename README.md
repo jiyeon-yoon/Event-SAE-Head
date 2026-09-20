@@ -7,10 +7,20 @@ OpenVLA L31 SAE feature의 출력층 민감도가 closed-loop feature 제거 시
 - 기반 저장소: [jiyeon-yoon/Event-SAE-Baseline](https://github.com/jiyeon-yoon/Event-SAE-Baseline)
 - 기반 commit: `56e9f012aa88532f9880259b371d9300a8013b9e`
 - 범위: 기존 OpenVLA·L31 SAE·LIBERO-Spatial 데이터를 재사용하며, 신규 모델 도입이나 SAE 재학습은 하지 않는다.
-- 새 연구 상태: 설계서 준비. M0~M3 구현과 CPU 테스트, M4~M5 실모델 검증·실험은 아직 수행하지 않았다.
+- 새 연구 상태: M0~M3 코드와 synthetic CPU 테스트 구현. M4~M5 실모델 검증·실험은 **미실행**.
+- 실행 설명서: [출력층 민감도 CLI와 입력 형식](docs/output_head_sensitivity.md)
 
 이 연구는 독립 저장소에서 개발한다. 실험 입력과 파생 모델 tensor, cache, rollout 결과는
 Git 외부에 보관한다. 설계서의 최초 구현 범위는 M0~M3 및 synthetic CPU 테스트다.
+
+```bash
+python -m pytest -q
+python scripts/openvla/output_head_sensitivity.py audit \
+  --config configs/research/openvla/output_head_sensitivity.yaml
+```
+
+공용 YAML의 입력 경로는 비어 있다. 위 audit은 누락 경로를 보고하고 exit code 2로
+종료하는 것이 정상이다. 모델 다운로드나 GPU 작업을 시작하지 않는다.
 
 아래 내용은 기반 Baseline에서 상속한 재현 안내와 검증 기록이다.
 출력층 민감도 연구의 새 CLI와 실험 완료 상태를 의미하지 않는다.

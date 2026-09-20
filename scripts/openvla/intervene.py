@@ -55,6 +55,14 @@ def _git_provenance() -> dict:
 
 def _protocol_config(cfg) -> dict:
     payload = asdict(cfg)
+    if payload["model"].get("attn_implementation") is None:
+        payload["model"].pop("attn_implementation", None)
+    if not payload["model"].get("local_files_only", False):
+        payload["model"].pop("local_files_only", None)
+    if payload["env"].get("trial_indices") is None:
+        payload["env"].pop("trial_indices", None)
+    if not payload["env"].get("per_episode_seed", False):
+        payload["env"].pop("per_episode_seed", None)
     payload["logging"].pop("root_dir", None)
     payload["env"]["resolved_task_ids"] = resolve_task_ids(cfg.env.task_ids, 10)
     return payload

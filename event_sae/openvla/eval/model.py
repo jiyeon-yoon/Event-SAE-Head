@@ -21,8 +21,14 @@ def load_model(cfg: Any):
         revision_kwargs["revision"] = cfg.model.revision
     if cfg.model.code_revision:
         revision_kwargs["code_revision"] = cfg.model.code_revision
+    if cfg.model.local_files_only:
+        revision_kwargs["local_files_only"] = True
     # Try flash_attention_2 first; fall back to sdpa if unavailable or incompatible.
     try:
+        if cfg.model.attn_implementation is not None:
+            if cfg.model.attn_implementation != "sdpa":
+                raise ValueError("Explicit research backend currently supports sdpa only")
+            raise ImportError("Research run pins sdpa; skip optional flash attention")
         import flash_attn  # noqa: F401
         try:
             model = AutoModelForVision2Seq.from_pretrained(
@@ -87,6 +93,8 @@ def get_processor(cfg: Any):
         kwargs["revision"] = cfg.model.revision
     if cfg.model.code_revision:
         kwargs["code_revision"] = cfg.model.code_revision
+    if cfg.model.local_files_only:
+        kwargs["local_files_only"] = True
     return AutoProcessor.from_pretrained(
         cfg.model.checkpoint, trust_remote_code=True, **kwargs
     )

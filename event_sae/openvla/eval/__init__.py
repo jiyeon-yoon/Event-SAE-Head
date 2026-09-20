@@ -7,8 +7,15 @@ from event_sae.openvla.eval.config import (
     load_config,
     parse_overrides,
     resolve_task_ids,
+    resolve_trial_indices,
 )
-from event_sae.openvla.eval.runner import EvalResult, eval_libero
+
+
+def __getattr__(name):
+    if name in {"EvalResult", "eval_libero"}:
+        from event_sae.openvla.eval import runner
+        return getattr(runner, name)
+    raise AttributeError(name)
 
 __all__ = [
     "EnvConfig",
@@ -21,4 +28,5 @@ __all__ = [
     "load_config",
     "parse_overrides",
     "resolve_task_ids",
+    "resolve_trial_indices",
 ]

@@ -19,7 +19,7 @@ import tqdm
 from libero.libero import benchmark
 
 from event_sae.openvla.activations import apply_collect_hooks, apply_sae_topk_collect_hooks
-from event_sae.openvla.eval.config import RunConfig, resolve_task_ids
+from event_sae.openvla.eval.config import RunConfig, resolve_task_ids, resolve_trial_indices
 from event_sae.openvla.eval.libero_utils import (
     get_libero_dummy_action,
     get_libero_env,
@@ -83,6 +83,9 @@ _MAX_STEPS_PER_SUITE = {
 def eval_libero(
     cfg: RunConfig,
     extra_hook_applier: Optional[Callable[..., List[object]]] = None,
+    *,
+    trial_indices_by_task: dict[int, list[int]] | None = None,
+    expected_initial_states: dict[tuple[int, int], str] | None = None,
 ) -> EvalResult:
     set_seed_everywhere(cfg.env.seed)
     cfg_unnorm_key = cfg.env.task_suite_name
@@ -168,6 +171,22 @@ def eval_libero(
     task_suite = benchmark_dict[cfg.env.task_suite_name]()
     num_tasks_in_suite = task_suite.n_tasks
     selected_task_ids = resolve_task_ids(cfg.env.task_ids, num_tasks_in_suite)
+    if trial_indices_by_task is not None and set(trial_indices_by_task) != set(selected_task_ids):
+        raise ValueError("Research trial map must match the exact selected task set")
+    # Validate every approved state before the first environment rollout.
+    if expected_initial_states is not None:
+        actual_keys = set()
+        for task_id in selected_task_ids:
+            states = task_suite.get_task_init_states(task_id)
+            selected = (trial_indices_by_task[task_id] if trial_indices_by_task is not None
+                        else cfg.env.trial_indices)
+            for index in resolve_trial_indices(selected, cfg.env.num_trials_per_task, len(states)):
+                key = (task_id, index)
+                actual_keys.add(key)
+                if expected_initial_states.get(key) != _initial_state_sha256(states[index]):
+                    raise ValueError(f"Approved initial-state hash mismatch: {key}")
+        if actual_keys != set(expected_initial_states):
+            raise ValueError("Approved initial-state set does not match this rollout")
     print(f"Task suite: {cfg.env.task_suite_name}")
     print(f"Selected task ids: {selected_task_ids}")
     log_file.write(f"Task suite: {cfg.env.task_suite_name}\n")
@@ -185,7 +204,11 @@ def eval_libero(
         env, task_description = get_libero_env(task, resolution=256)
 
         task_episodes, task_successes = 0, 0
-        for episode_idx in tqdm.tqdm(range(cfg.env.num_trials_per_task)):
+        trial_indices = resolve_trial_indices(
+            trial_indices_by_task[task_id] if trial_indices_by_task is not None else cfg.env.trial_indices,
+            cfg.env.num_trials_per_task, len(initial_states)
+        )
+        for episode_idx in tqdm.tqdm(trial_indices):
             episode_num = total_episodes + 1
             initial_state = initial_states[episode_idx]
             initial_state_sha256 = _initial_state_sha256(initial_state)
@@ -206,6 +229,13 @@ def eval_libero(
 
             print(f"\nTask: {task_description}")
             log_file.write(f"\nTask: {task_description}\n")
+            if cfg.env.per_episode_seed:
+                # Condition-independent state RNG: changing feature/condition order
+                # must not change the random stream for an original initial state.
+                seed_material = f"{cfg.env.seed}:{task_id}:{episode_idx}".encode()
+                episode_seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:4], "big")
+                set_seed_everywhere(episode_seed)
+                env.seed(episode_seed)
             env.reset()
             obs = env.set_init_state(initial_state)
 

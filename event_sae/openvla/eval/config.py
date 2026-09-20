@@ -18,6 +18,8 @@ class ModelConfig:
     load_in_8bit: bool = False
     load_in_4bit: bool = False
     center_crop: bool = True
+    attn_implementation: str | None = None
+    local_files_only: bool = False
 
 
 @dataclass
@@ -27,6 +29,31 @@ class EnvConfig:
     num_trials_per_task: int = 50
     seed: int = 7
     task_ids: str | list[int] = ""
+    trial_indices: list[int] | None = None
+    per_episode_seed: bool = False
+
+    def __post_init__(self) -> None:
+        # Bounds against a particular task's state array are checked at runtime.
+        resolve_trial_indices(self.trial_indices, self.num_trials_per_task)
+
+
+def resolve_trial_indices(
+    trial_indices: list[int] | None, num_trials_per_task: int,
+    num_initial_states: int | None = None,
+) -> list[int]:
+    """Keep original LIBERO indices; None retains the historical first-N order."""
+    if type(num_trials_per_task) is not int or num_trials_per_task <= 0:
+        raise ValueError("num_trials_per_task must be a positive integer")
+    selected = list(range(num_trials_per_task)) if trial_indices is None else trial_indices
+    if not isinstance(selected, list) or not selected:
+        raise ValueError("trial_indices must be a nonempty list")
+    if any(type(index) is not int or index < 0 for index in selected):
+        raise ValueError("trial_indices must contain nonnegative integer original indices")
+    if len(selected) != num_trials_per_task or len(set(selected)) != len(selected):
+        raise ValueError("trial_indices must be unique and match num_trials_per_task")
+    if num_initial_states is not None and any(index >= num_initial_states for index in selected):
+        raise ValueError("trial_indices exceeds available initial states")
+    return list(selected)
 
 
 @dataclass

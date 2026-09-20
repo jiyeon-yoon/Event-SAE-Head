@@ -1,13 +1,14 @@
 ## Codex 구현 지시서: Event-SAE 출력층 민감도로 feature의 행동적 중요도 예측하기
 
 - 문서 버전: 1.1 / 2026-09-20
-- 개발 대상 저장소: `https://github.com/jiyeon-yoon/Event-SAE-Head` (public 공개 예정)
+- 개발 대상 저장소: `https://github.com/jiyeon-yoon/Event-SAE-Head` (public)
 - 기반 저장소: `https://github.com/jiyeon-yoon/Event-SAE-Baseline`
 - 기반 코드 검토 commit: `56e9f012aa88532f9880259b371d9300a8013b9e`
 - 저장 경로: `docs/research/CODEX_EVENT_SAE_OUTPUT_HEAD_SENSITIVITY_PLAN.md`
 - 기존 재현 runbook의 고정 baseline: `fd3bc485668b8fb32b3948a9b642859f41b16277`
 - 선택한 독립 실험: **③ 출력층 민감도 예측**
-- 이 문서는 구현 요구사항이다. 새 CLI·모듈·설정 예시는 아직 구현된 기능이 아니다.
+- 이 문서는 구현 요구사항이다. M0~M3 구현과 CPU 검증 상태·현재 CLI의 정확한 지원 범위는
+  [실행 설명서](../output_head_sensitivity.md)를 참고한다. M4~M5 실제 검증·실험은 미실행이다.
 
 v1.1은 전체 v1.0 설계를 유지하면서 다음 검토 결과를 반영한다.
 
