@@ -1,23 +1,28 @@
 # OpenVLA 출력층 민감도: 구현 및 실행 안내
 
-## 구현한 범위와 아직 확인하지 않은 것
+## 구현 범위와 현재 실행 상태
 
 기존 OpenVLA 마지막 decoder residual에서 feature 하나를 제거한 뒤, 실제 final
 norm과 lm_head의 full-vocabulary 분포 변화를 계산한다. 주 점수는
 `head_full_vocab_kl_fixed_prefix = KL(p_base || p_edit)`다. 기존 문맥에서의 국소
 변화이며, 편집된 7차원 counterfactual action sequence나 성공률 감소 자체가 아니다.
 
-2026-09-20 최초 구현 범위:
+2026-09-20에 M0~M3 코드를 구현했고, 2026-09-21에 RTX 4090에서 M4 pilot을
+실행했다. 전체 명령·artifact·결과는
+[출력층 민감도 pilot 재현 기록](reproduce_output_head_sensitivity_pilot.md)에 있다.
 
-| 단계 | 코드·CPU 검증 | 실제 모델/데이터 실행 |
+| 단계 | 현재 상태 | 실제 확인 범위 |
 |---|---|---|
-| M0 | 입력 audit, strict config, provenance와 실행 차단 | 공용 설정의 미지정 경로 확인만 수행 |
-| M1 | complete-forward readout mapping, lossless cache, local head export/load | 미실행 |
-| M2 | reference suppression, bounded active-pair KL, 계층적 집계 | 미실행 |
-| M3 | split, baseline adapter, 후보 계획, paired bootstrap, CLI, synthetic E2E | 미실행 |
-| M4–M5 | 승인 gate, 기존 hook/runner 연결, live input capture, fake-runtime 테스트 | 실모델 parity·GPU score·LIBERO rollout 모두 미실행 |
+| M0 | 완료 | 실제 입력, revision, checksum, provenance, 실행 차단 |
+| M1 | 완료 | task 0·1의 5,600 readout cache와 local head export/load |
+| M2 | 완료 | 32,768 feature, 308,780 active pair의 reference Head-KL score |
+| M3 | 완료 | exact Event-score scope adapter, 16-feature plan, paired 분석 |
+| M4 | **pilot 완료** | 실모델 BF16 parity, GPU score, 72 LIBERO rollouts |
+| M5 | **미실행** | 독립 held-out task/state의 confirmatory 평가 |
 
-Synthetic CPU 테스트는 수치·연결·안전장치 테스트이며 연구 가설의 실증 결과가 아니다.
+Synthetic CPU 테스트는 수치·연결·안전장치 테스트이며 그 자체는 연구 가설의
+실증 결과가 아니다. 실증 결과는 따로 수행한 M4 pilot에서 나왔으며, 평가가
+2 tasks·4 cases에 그친 overlapping pilot이므로 확증 결론은 아니다.
 기존 `Event-SAE-Baseline`, `Event-SAE-Pipeline` 또는 그 입력을 수정하지 않는다.
 대용량 다운로드, 학습, GPU 작업, commit/push는 최초 구현 작업에 포함하지 않는다.
 
@@ -28,7 +33,8 @@ Synthetic CPU 테스트는 수치·연결·안전장치 테스트이며 연구 �
 - Live input capture 추가 후 재검증: **168 passed, 6.83초**.
 - `git diff --check`, 신규 연구 코드/CLI `compileall`, CLI `--help`: 통과.
 - 공용 설정 `audit`: exit code 2, 경로 미지정과 runtime `not_run`을 정상 보고.
-- 실데이터 score/후보 plan은 실행하지 않았으므로 실제 후보 수·rollout 수·GPU 시간은 아직 산정하지 않음.
+- 후속 M4 pilot: 5,600 readouts, 32,768 features, 308,780 active pairs, GPU scoring 676.60초,
+  16-feature panel과 control의 72 rollouts를 완료. 정확한 기록은 위 Runbook 참조.
 - 테스트 환경: macOS, Python 환경의 PyTorch 2.2.2; 이 시간은 테스트 실행 시간이지 실험 처리량이 아님.
 
 ## 파일별 역할
@@ -267,4 +273,5 @@ predictor 비교 CSV와 uncertainty JSON 및 report.md가 생긴다. Per-row edi
 - Working-memory 상한은 중간 tensor 추정량이다. 모델/SAE 가중치·allocator overhead를 포함한 총 GPU RAM 보장은 아니며 실제 peak 값은 score 때 별도 기록한다.
 - 원본 대형 dense shard identity는 size/mtime와 index hash를 사용하며 그 검증 수준을 명시한다. 새 cache/head는 내용 SHA256을 검사한다. 전체 수백 GB source hash를 재계산했다고 주장하지 않는다.
 - Native runner는 task별 동일 case 수 및 전체 case identity 검사를 지원한다. 연구용 episode seed는 seed/task/original-trial hash에서 유도하며 기존 run의 RNG 방식과 구별한다.
-- M4의 실제 dependency/runtime/model compatibility, 처리량, GPU memory, 성공률은 아직 측정하지 않았다. Fake runtime 통과가 이를 대신하지 않는다.
+- M4 pilot에서 dependency/runtime/model compatibility, 처리량, CUDA peak allocation, 성공률을
+  실측했다. 다만 이는 overlapping pilot이며 M5 held-out confirmatory 결과를 대신하지 않는다.

@@ -7,8 +7,10 @@
 - 저장 경로: `docs/research/CODEX_EVENT_SAE_OUTPUT_HEAD_SENSITIVITY_PLAN.md`
 - 기존 재현 runbook의 고정 baseline: `fd3bc485668b8fb32b3948a9b642859f41b16277`
 - 선택한 독립 실험: **③ 출력층 민감도 예측**
-- 이 문서는 구현 요구사항이다. M0~M3 구현과 CPU 검증 상태·현재 CLI의 정확한 지원 범위는
-  [실행 설명서](../output_head_sensitivity.md)를 참고한다. M4~M5 실제 검증·실험은 미실행이다.
+- 이 문서는 구현 요구사항이다. M0~M3 구현과 현재 CLI의 정확한 지원 범위는
+  [실행 설명서](../output_head_sensitivity.md)를 참고한다. M4 실모델 pilot은 수행됐고 M5 held-out
+  confirmatory 실험은 미수행이다. 실제 M4 범위와 결과는
+  [RunPod 재현 기록](../reproduce_output_head_sensitivity_pilot.md)을 참고한다.
 
 v1.1은 전체 v1.0 설계를 유지하면서 다음 검토 결과를 반영한다.
 

@@ -7,11 +7,13 @@ OpenVLA L31 SAE feature의 출력층 민감도가 closed-loop feature 제거 시
 - 기반 저장소: [jiyeon-yoon/Event-SAE-Baseline](https://github.com/jiyeon-yoon/Event-SAE-Baseline)
 - 기반 commit: `56e9f012aa88532f9880259b371d9300a8013b9e`
 - 범위: 기존 OpenVLA·L31 SAE·LIBERO-Spatial 데이터를 재사용하며, 신규 모델 도입이나 SAE 재학습은 하지 않는다.
-- 새 연구 상태: M0~M3 코드와 synthetic CPU 테스트 구현. M4~M5 실모델 검증·실험은 **미실행**.
+- 새 연구 상태: M0~M3 구현, M4 실모델 parity·GPU score·72-rollout pilot 완료. M5 독립 held-out confirmatory 실험은 **미실행**.
 - 실행 설명서: [출력층 민감도 CLI와 입력 형식](docs/output_head_sensitivity.md)
+- 실제 실험 기록: [RTX 4090 output-head pilot 재현 Runbook](docs/reproduce_output_head_sensitivity_pilot.md)
 
 이 연구는 독립 저장소에서 개발한다. 실험 입력과 파생 모델 tensor, cache, rollout 결과는
-Git 외부에 보관한다. 설계서의 최초 구현 범위는 M0~M3 및 synthetic CPU 테스트다.
+Git 외부에 보관한다. 최초 구현은 M0~M3까지였고, 현재는 M4 pilot의 실모델 검증과
+closed-loop 분석까지 완료했다. 결과는 유망한 pilot이며 확증 결론은 아니다.
 
 ```bash
 python -m pytest -q
@@ -23,7 +25,7 @@ python scripts/openvla/output_head_sensitivity.py audit \
 종료하는 것이 정상이다. 모델 다운로드나 GPU 작업을 시작하지 않는다.
 
 아래 내용은 기반 Baseline에서 상속한 재현 안내와 검증 기록이다.
-출력층 민감도 연구의 새 CLI와 실험 완료 상태를 의미하지 않는다.
+출력층 민감도 pilot의 정확한 실행 범위와 한계는 위 재현 Runbook을 따른다.
 
 ---
 
