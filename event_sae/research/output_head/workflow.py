@@ -13,6 +13,17 @@ from .provenance import (atomic_write_json, atomic_write_text, fingerprint,
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+PROCESSOR_IDENTITY_FILES = (
+    "preprocessor_config.json",
+    "processor_config.json",
+    "tokenizer_config.json",
+    "tokenizer.json",
+    "tokenizer.model",
+    "special_tokens_map.json",
+    "added_tokens.json",
+)
+REQUIRED_PROCESSOR_IDENTITY_FILES = ("preprocessor_config.json", "tokenizer_config.json")
+TOKENIZER_IDENTITY_FILES = ("tokenizer.json", "tokenizer.model")
 
 
 def output_root(cfg: dict) -> Path:
@@ -143,6 +154,106 @@ def split_workflow(cfg: dict) -> dict:
     result = build_split_manifest(required_input(cfg, "source_episode_manifest"), cfg["splits"])
     write_once_json(output_root(cfg) / "split_manifest.json", result)
     return result
+
+
+def setup_head_workflow(cfg: dict, config_path: str | Path, snapshot_path: str | Path,
+                        metadata_output: str | Path | None = None) -> dict:
+    """Create verified local head metadata and connect it to a local YAML.
+
+    This is a config-only setup step: it hashes processor assets and inspects
+    snapshot metadata/indexes, but does not load OpenVLA weights or use CUDA.
+    """
+    import yaml
+    from .config import validate_config
+    from .head import NORM_IMPLEMENTATION, _resolve_snapshot_text_config
+
+    config_file = Path(config_path).expanduser().resolve()
+    snapshot = Path(snapshot_path).expanduser().resolve()
+    if not config_file.is_file():
+        raise FileNotFoundError(f"Local experiment config not found: {config_file}")
+    if not snapshot.is_dir():
+        raise FileNotFoundError(f"Local model snapshot not found: {snapshot}")
+    metadata_path = (Path(metadata_output).expanduser().resolve() if metadata_output else
+                     snapshot.parent / "head.json")
+    if metadata_path == snapshot or snapshot in metadata_path.parents:
+        raise ValueError("Head metadata must be outside the read-only model snapshot")
+
+    model_config_path = snapshot / "config.json"
+    index_path = snapshot / "model.safetensors.index.json"
+    model_config = read_json(model_config_path)
+    text_config, resolution = _resolve_snapshot_text_config(model_config)
+    layers = text_config.get("num_hidden_layers")
+    eps = text_config.get("rms_norm_eps")
+    if cfg["scope"]["layer_idx"] != layers - 1:
+        raise ValueError("Configured target is not the final decoder layer")
+    if text_config.get("torch_dtype", model_config.get("torch_dtype")) != cfg["model"]["expected_live_hidden_dtype"]:
+        raise ValueError("Snapshot text dtype differs from expected live hidden dtype")
+
+    tensor_keys = {"norm_weight": "language_model.model.norm.weight",
+                   "head_weight": "language_model.lm_head.weight"}
+    weight_map = read_json(index_path).get("weight_map", {})
+    missing_tensors = [value for value in tensor_keys.values() if value not in weight_map]
+    if missing_tensors:
+        raise ValueError(f"Snapshot index lacks required output-head tensors: {missing_tensors}")
+
+    processor_hashes = {}
+    for name in PROCESSOR_IDENTITY_FILES:
+        path = snapshot / name
+        processor_hashes[name] = sha256_file(path) if path.is_file() else None
+    missing_processor = [name for name in REQUIRED_PROCESSOR_IDENTITY_FILES
+                         if processor_hashes[name] is None]
+    if all(processor_hashes[name] is None for name in TOKENIZER_IDENTITY_FILES):
+        missing_processor.append("tokenizer.json or tokenizer.model")
+    if missing_processor:
+        raise FileNotFoundError(f"Required processor identity files missing: {missing_processor}")
+    base_eval_path = Path(cfg["rollout"]["base_eval_config"]).expanduser().resolve()
+    base_eval = yaml.safe_load(base_eval_path.read_text(encoding="utf-8")) or {}
+    preprocessing_code = REPO_ROOT / "event_sae/openvla/eval/model.py"
+    import transformers
+    processor_evidence = {
+        "schema_version": "processor_identity_v1",
+        "model_revision": cfg["model"]["revision"],
+        "code_revision": cfg["model"]["code_revision"],
+        "files": processor_hashes,
+        "transformers_version": transformers.__version__,
+        "preprocessing": {
+            "center_crop": base_eval.get("model", {}).get("center_crop"),
+            "base_eval_config_sha256": sha256_file(base_eval_path),
+            "eval_model_code_sha256": sha256_file(preprocessing_code),
+        },
+    }
+    metadata = {
+        "model_revision": cfg["model"]["revision"],
+        "code_revision": cfg["model"]["code_revision"],
+        "target_layer": cfg["scope"]["layer_idx"],
+        "hidden_dtype": cfg["model"]["expected_live_hidden_dtype"],
+        "norm_dtype": cfg["model"]["expected_live_hidden_dtype"],
+        "head_dtype": cfg["model"]["expected_live_hidden_dtype"],
+        "processor_identity": f"sha256:{fingerprint(processor_evidence)}",
+        "processor_identity_evidence": processor_evidence,
+        "norm_spec": {"implementation": NORM_IMPLEMENTATION, "eps": float(eps)},
+        "tensor_keys": tensor_keys,
+        "setup_text_config_resolution": resolution,
+    }
+
+    document = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+    document.setdefault("inputs", {})["local_model_snapshot"] = str(snapshot)
+    document["inputs"]["head_export_metadata"] = str(metadata_path)
+    document.setdefault("scoring", {})["device"] = "cuda:0"
+    validate_config(document)
+    write_once_json(metadata_path, metadata)
+    atomic_write_text(config_file, yaml.safe_dump(document, sort_keys=False), overwrite=True)
+    return {
+        "status": "configured",
+        "config": str(config_file),
+        "local_model_snapshot": str(snapshot),
+        "head_export_metadata": str(metadata_path),
+        "processor_identity": metadata["processor_identity"],
+        "num_layers": layers,
+        "target_layer": cfg["scope"]["layer_idx"],
+        "norm_eps": float(eps),
+        "model_execution": False,
+    }
 
 
 def export_workflow(cfg: dict) -> dict:
