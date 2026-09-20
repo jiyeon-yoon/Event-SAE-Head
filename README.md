@@ -1,4 +1,23 @@
-# Event-SAE Baseline
+# Event-SAE Head
+
+OpenVLA L31 SAE feature의 출력층 민감도가 closed-loop feature 제거 시 성공률 감소를
+예측하고, 평가할 feature 후보를 선정하는 데 유용한지 연구한다.
+
+- 전체 설계서: [출력층 민감도 연구 계획 v1.1](docs/research/CODEX_EVENT_SAE_OUTPUT_HEAD_SENSITIVITY_PLAN.md)
+- 기반 저장소: [jiyeon-yoon/Event-SAE-Baseline](https://github.com/jiyeon-yoon/Event-SAE-Baseline)
+- 기반 commit: `56e9f012aa88532f9880259b371d9300a8013b9e`
+- 범위: 기존 OpenVLA·L31 SAE·LIBERO-Spatial 데이터를 재사용하며, 신규 모델 도입이나 SAE 재학습은 하지 않는다.
+- 새 연구 상태: 설계서 준비. M0~M3 구현과 CPU 테스트, M4~M5 실모델 검증·실험은 아직 수행하지 않았다.
+
+이 연구는 독립 저장소에서 개발한다. 실험 입력과 파생 모델 tensor, cache, rollout 결과는
+Git 외부에 보관한다. 설계서의 최초 구현 범위는 M0~M3 및 synthetic CPU 테스트다.
+
+아래 내용은 기반 Baseline에서 상속한 재현 안내와 검증 기록이다.
+출력층 민감도 연구의 새 CLI와 실험 완료 상태를 의미하지 않는다.
+
+---
+
+## 기반 Baseline 소개
 
 [xc-j/Event-SAE](https://github.com/xc-j/Event-SAE)의 공개 코드를 기반으로
 OpenVLA + LIBERO-Spatial 실험을 재현하고 검증할 수 있게 정리한 baseline이다.

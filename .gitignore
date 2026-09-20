@@ -42,3 +42,14 @@ venv/
 .DS_Store
 *.swp
 external/openpi-event-sae/
+
+# Output-head sensitivity research artifacts and local configuration
+/artifacts/
+/runs/
+/data/
+/checkpoints/
+/research_outputs/
+/configs/local/
+.env
+.env.*
+!.env.example
