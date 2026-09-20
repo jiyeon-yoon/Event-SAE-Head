@@ -156,6 +156,42 @@ def split_workflow(cfg: dict) -> dict:
     return result
 
 
+def build_local_processor_identity(cfg: dict, snapshot_path: str | Path) -> dict:
+    """Hash the pinned processor inputs and native preprocessing contract."""
+    import transformers
+    import yaml
+
+    snapshot = Path(snapshot_path).expanduser().resolve()
+    if not snapshot.is_dir():
+        raise FileNotFoundError(f"Local model snapshot not found: {snapshot}")
+    processor_hashes = {}
+    for name in PROCESSOR_IDENTITY_FILES:
+        path = snapshot / name
+        processor_hashes[name] = sha256_file(path) if path.is_file() else None
+    missing_processor = [name for name in REQUIRED_PROCESSOR_IDENTITY_FILES
+                         if processor_hashes[name] is None]
+    if all(processor_hashes[name] is None for name in TOKENIZER_IDENTITY_FILES):
+        missing_processor.append("tokenizer.json or tokenizer.model")
+    if missing_processor:
+        raise FileNotFoundError(f"Required processor identity files missing: {missing_processor}")
+    base_eval_path = Path(cfg["rollout"]["base_eval_config"]).expanduser().resolve()
+    base_eval = yaml.safe_load(base_eval_path.read_text(encoding="utf-8")) or {}
+    preprocessing_code = REPO_ROOT / "event_sae/openvla/eval/model.py"
+    evidence = {
+        "schema_version": "processor_identity_v1",
+        "model_revision": cfg["model"]["revision"],
+        "code_revision": cfg["model"]["code_revision"],
+        "files": processor_hashes,
+        "transformers_version": transformers.__version__,
+        "preprocessing": {
+            "center_crop": base_eval.get("model", {}).get("center_crop"),
+            "base_eval_config_sha256": sha256_file(base_eval_path),
+            "eval_model_code_sha256": sha256_file(preprocessing_code),
+        },
+    }
+    return {"identity": f"sha256:{fingerprint(evidence)}", "evidence": evidence}
+
+
 def setup_head_workflow(cfg: dict, config_path: str | Path, snapshot_path: str | Path,
                         metadata_output: str | Path | None = None) -> dict:
     """Create verified local head metadata and connect it to a local YAML.
@@ -196,32 +232,7 @@ def setup_head_workflow(cfg: dict, config_path: str | Path, snapshot_path: str |
     if missing_tensors:
         raise ValueError(f"Snapshot index lacks required output-head tensors: {missing_tensors}")
 
-    processor_hashes = {}
-    for name in PROCESSOR_IDENTITY_FILES:
-        path = snapshot / name
-        processor_hashes[name] = sha256_file(path) if path.is_file() else None
-    missing_processor = [name for name in REQUIRED_PROCESSOR_IDENTITY_FILES
-                         if processor_hashes[name] is None]
-    if all(processor_hashes[name] is None for name in TOKENIZER_IDENTITY_FILES):
-        missing_processor.append("tokenizer.json or tokenizer.model")
-    if missing_processor:
-        raise FileNotFoundError(f"Required processor identity files missing: {missing_processor}")
-    base_eval_path = Path(cfg["rollout"]["base_eval_config"]).expanduser().resolve()
-    base_eval = yaml.safe_load(base_eval_path.read_text(encoding="utf-8")) or {}
-    preprocessing_code = REPO_ROOT / "event_sae/openvla/eval/model.py"
-    import transformers
-    processor_evidence = {
-        "schema_version": "processor_identity_v1",
-        "model_revision": cfg["model"]["revision"],
-        "code_revision": cfg["model"]["code_revision"],
-        "files": processor_hashes,
-        "transformers_version": transformers.__version__,
-        "preprocessing": {
-            "center_crop": base_eval.get("model", {}).get("center_crop"),
-            "base_eval_config_sha256": sha256_file(base_eval_path),
-            "eval_model_code_sha256": sha256_file(preprocessing_code),
-        },
-    }
+    processor = build_local_processor_identity(cfg, snapshot)
     metadata = {
         "model_revision": cfg["model"]["revision"],
         "code_revision": cfg["model"]["code_revision"],
@@ -229,8 +240,8 @@ def setup_head_workflow(cfg: dict, config_path: str | Path, snapshot_path: str |
         "hidden_dtype": cfg["model"]["expected_live_hidden_dtype"],
         "norm_dtype": cfg["model"]["expected_live_hidden_dtype"],
         "head_dtype": cfg["model"]["expected_live_hidden_dtype"],
-        "processor_identity": f"sha256:{fingerprint(processor_evidence)}",
-        "processor_identity_evidence": processor_evidence,
+        "processor_identity": processor["identity"],
+        "processor_identity_evidence": processor["evidence"],
         "norm_spec": {"implementation": NORM_IMPLEMENTATION, "eps": float(eps)},
         "tensor_keys": tensor_keys,
         "setup_text_config_resolution": resolution,

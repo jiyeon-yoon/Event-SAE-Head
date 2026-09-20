@@ -15,7 +15,7 @@ norm과 lm_head의 full-vocabulary 분포 변화를 계산한다. 주 점수는
 | M1 | complete-forward readout mapping, lossless cache, local head export/load | 미실행 |
 | M2 | reference suppression, bounded active-pair KL, 계층적 집계 | 미실행 |
 | M3 | split, baseline adapter, 후보 계획, paired bootstrap, CLI, synthetic E2E | 미실행 |
-| M4–M5 | 승인 gate와 기존 hook/runner 연결 adapter, fake-runtime 테스트 | 실모델 parity·GPU score·LIBERO rollout 모두 미실행 |
+| M4–M5 | 승인 gate, 기존 hook/runner 연결, live input capture, fake-runtime 테스트 | 실모델 parity·GPU score·LIBERO rollout 모두 미실행 |
 
 Synthetic CPU 테스트는 수치·연결·안전장치 테스트이며 연구 가설의 실증 결과가 아니다.
 기존 `Event-SAE-Baseline`, `Event-SAE-Pipeline` 또는 그 입력을 수정하지 않는다.
@@ -25,6 +25,7 @@ Synthetic CPU 테스트는 수치·연결·안전장치 테스트이며 연구 �
 
 - 변경 전 전체 테스트: 26 passed.
 - 변경 후 `python -m pytest -q`: **159 passed, 7.80초**. 기존 회귀 테스트 포함.
+- Live input capture 추가 후 재검증: **168 passed, 6.83초**.
 - `git diff --check`, 신규 연구 코드/CLI `compileall`, CLI `--help`: 통과.
 - 공용 설정 `audit`: exit code 2, 경로 미지정과 runtime `not_run`을 정상 보고.
 - 실데이터 score/후보 plan은 실행하지 않았으므로 실제 후보 수·rollout 수·GPU 시간은 아직 산정하지 않음.
@@ -38,6 +39,8 @@ Synthetic CPU 테스트는 수치·연결·안전장치 테스트이며 연구 �
 - `candidates.py`, `results.py`: 원래 ranking 공식, 고정 panel, paired 성공률 drop/CI.
 - `provenance.py`, `workflow.py`, `runtime.py`: artifact hash, 단계 연결, opt-in runtime.
 - `scripts/openvla/output_head_sensitivity.py`: 단일 CLI.
+- `scripts/openvla/headsetup.py`: 로컬 snapshot 검증, head metadata 생성·export.
+- `scripts/openvla/headinputs.py`: 정책 가중치 없이 live LIBERO 입력 2개 캡처.
 - `configs/research/openvla/output_head_sensitivity.yaml`: 경로가 비어 있는 공용 설정.
 
 기존 eval 코드는 lazy import와 선택적 원본 `trial_indices`, 연구용 episode별 seed,
@@ -138,7 +141,7 @@ Action decoding metadata는 확인된 경우만 exporter에 `action_decoding`으
 없어도 full-vocab KL은 가능하며 bin 변화 지표는 null과 사유를 기록한다. Padded vocab,
 effective vocab, bin centers를 혼동하지 않는다.
 
-## 승인 후 실행 순서 — 이번 개발에서 실행하지 않은 명령
+## RunPod 실행 순서
 
 ```bash
 python scripts/openvla/output_head_sensitivity.py audit --config configs/local/head.yaml
@@ -146,8 +149,10 @@ python scripts/openvla/output_head_sensitivity.py audit --config configs/local/h
 # Confirmatory 실험이면 반드시 pilot 전에 생성·보존한다.
 python scripts/openvla/output_head_sensitivity.py split --config configs/local/head.yaml
 
-python scripts/openvla/output_head_sensitivity.py export-head --config configs/local/head.yaml
+python scripts/openvla/headsetup.py --config configs/local/head.yaml \
+  --snapshot /workspace/head-inputs/openvla-spatial --export
 python scripts/openvla/output_head_sensitivity.py prepare --config configs/local/head.yaml
+python scripts/openvla/headinputs.py --config configs/local/head.yaml --allow-simulator
 python scripts/openvla/output_head_sensitivity.py validate --config configs/local/head.yaml \
   --allow-model-execution
 python scripts/openvla/output_head_sensitivity.py score --config configs/local/head.yaml
@@ -174,6 +179,12 @@ Confirmatory에는 `mode: confirmatory`, `frozen_before_pilot: true`, 실제
 `split_manifest_hash`, `discovery_eval_overlap: false`,
 `evaluation_labels_previously_used: false`가 필요하며 frozen split의 실제 membership과
 대조한다. 기존 label을 보고 방법을 정했으면 confirmatory로 전환할 수 없다.
+
+`headinputs.py`는 LIBERO simulator와 pinned processor만 불러오고 7B policy 가중치는
+불러오지 않는다. task 0/1의 fresh observation을 기존 `get_action()` 전처리에 통과시킨 뒤
+`predict_action` 경계에서 tensor를 복사하고 중단하므로 policy action은 생성·실행하지
+않는다. 기본 출력은 head metadata 옆의 `runtime.pt`이며 로컬 YAML의
+`inputs.runtime_inputs`가 자동으로 갱신된다. 기존 파일은 덮어쓰지 않는다.
 
 `validate`의 runtime `.pt`는 `synthetic: false`, `model_revision`, `code_revision`,
 `processor_identity`, `episodes`, `calls`를 포함한다. `calls`는 processor가 이미 만든
