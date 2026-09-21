@@ -37,6 +37,7 @@ splits:
   validation_per_task: 5
   evaluation_per_task: 10
   require_initial_state_disjoint: true
+  frozen_before_pilot: null
   evaluation_labels_previously_used: null
 sampling:
   mode: pilot

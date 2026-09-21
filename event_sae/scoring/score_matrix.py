@@ -388,6 +388,42 @@ def _resolve_shard_path(topk_run_dir: Path, shard_relpath: str) -> Path:
     raise FileNotFoundError(f"Shard {shard_relpath} not under {topk_run_dir}")
 
 
+def _record_episode_task(mapping: dict[int, int], episode: int, task_id: int) -> None:
+    previous = mapping.get(episode)
+    if previous is not None and previous != task_id:
+        raise ValueError(
+            f"Conflicting task_id for discovery episode_num={episode}: "
+            f"{previous} versus {task_id}"
+        )
+    if episode < 0 or task_id < 0:
+        raise ValueError("Discovery episode_num and task_id must be nonnegative.")
+    mapping[episode] = task_id
+
+
+def _merge_shard_episode_tasks(
+    payload: dict,
+    episode_to_task_id: dict[int, int],
+    allowed_episode_nums: set[int] | None,
+) -> None:
+    """Learn event-free discovery episodes, and reject conflicting shard IDs.
+
+    Only opted-in discovery scoring uses shard task IDs; the legacy mapping
+    behavior stays unchanged. Excluded rows can never extend the mapping.
+    """
+    if allowed_episode_nums is None or "task_id" not in payload:
+        return
+    episodes = torch.as_tensor(payload["episode_num"], dtype=torch.int64)
+    task_ids = torch.as_tensor(payload["task_id"], dtype=torch.int64)
+    if task_ids.ndim == 0:
+        task_ids = task_ids.expand_as(episodes)
+    if task_ids.shape != episodes.shape:
+        raise ValueError("Shard task_id and episode_num shapes differ.")
+    keep = torch.isin(episodes, torch.tensor(sorted(allowed_episode_nums), dtype=torch.int64))
+    pairs = torch.unique(torch.stack((episodes[keep], task_ids[keep]), dim=1), dim=0)
+    for episode, task_id in pairs.tolist():
+        _record_episode_task(episode_to_task_id, int(episode), int(task_id))
+
+
 def _load_timestep_vectors(
     topk_run_dir: Path,
     *,
@@ -396,6 +432,8 @@ def _load_timestep_vectors(
     task_id_set: set[int],
     dict_size: int,
     required_timestep_keys: set[tuple[int, int]] | None = None,
+    allowed_episode_nums: set[int] | None = None,
+    contributing_episode_nums: set[int] | None = None,
 ) -> tuple[
     dict[tuple[int, int], torch.Tensor],
     dict[int, torch.Tensor],
@@ -424,6 +462,7 @@ def _load_timestep_vectors(
         "rows_skipped_unknown_task": 0,
         "rows_skipped_nonexecuted": 0,
         "rows_skipped_no_effective_step": 0,
+        "rows_skipped_episode_filter": 0,
     }
     # OpenVLA rows are already ordered by (episode, environment step). Stream
     # one timestep at a time so task means do not require a dense 32,768-D
@@ -438,6 +477,8 @@ def _load_timestep_vectors(
             dict_size=dict_size,
             required_timestep_keys=required_timestep_keys,
             counters=counters,
+            allowed_episode_nums=allowed_episode_nums,
+            contributing_episode_nums=contributing_episode_nums,
         )
 
     timestep_sums: dict[tuple[int, int], torch.Tensor] = {}
@@ -450,6 +491,7 @@ def _load_timestep_vectors(
     for shard_meta in shard_iter:
         shard_path = _resolve_shard_path(topk_run_dir, shard_meta["path"])
         payload = torch.load(shard_path, map_location="cpu")
+        _merge_shard_episode_tasks(payload, episode_to_task_id, allowed_episode_nums)
         counters["shards_loaded"] += 1
         ep_arr = payload["episode_num"].to(dtype=torch.int64)
         step_arr = payload["step_in_episode"].to(dtype=torch.int64)
@@ -471,6 +513,9 @@ def _load_timestep_vectors(
 
         for row_idx in range(n_rows):
             ep = int(ep_arr[row_idx])
+            if allowed_episode_nums is not None and ep not in allowed_episode_nums:
+                counters["rows_skipped_episode_filter"] += 1
+                continue
             task_id = episode_to_task_id.get(ep)
             if task_id is None or task_id not in task_id_set:
                 counters["rows_skipped_unknown_task"] += 1
@@ -517,6 +562,8 @@ def _load_timestep_vectors(
     task_counts: dict[int, int] = defaultdict(int)
     for key, vec in timestep_vectors.items():
         tid = timestep_task_ids[key]
+        if contributing_episode_nums is not None:
+            contributing_episode_nums.add(key[0])
         if tid not in task_sums:
             task_sums[tid] = torch.zeros(dict_size, dtype=torch.float32)
         task_sums[tid] += vec
@@ -539,6 +586,8 @@ def _load_openvla_timestep_vectors_streaming(
     dict_size: int,
     required_timestep_keys: set[tuple[int, int]] | None,
     counters: dict[str, int],
+    allowed_episode_nums: set[int] | None = None,
+    contributing_episode_nums: set[int] | None = None,
 ):
     """Vectorized OpenVLA aggregation with bounded host memory.
 
@@ -571,6 +620,8 @@ def _load_openvla_timestep_vectors_streaming(
         if pending_key is None or pending_sum is None or pending_count <= 0:
             return
         mean = pending_sum / float(pending_count)
+        if contributing_episode_nums is not None:
+            contributing_episode_nums.add(pending_key[0])
         task_id = episode_to_task_id[pending_key[0]]
         if task_id not in task_sums:
             task_sums[task_id] = torch.zeros(dict_size, dtype=torch.float32)
@@ -590,11 +641,25 @@ def _load_openvla_timestep_vectors_streaming(
             _resolve_shard_path(topk_run_dir, shard_meta["path"]), map_location="cpu"
         )
         counters["shards_loaded"] += 1
+        _merge_shard_episode_tasks(payload, episode_to_task_id, allowed_episode_nums)
+        if allowed_episode_nums is not None:
+            # Shards can supply the mapping for episodes with no events.
+            max_episode = max(episode_to_task_id, default=0)
+            episode_task_lookup = torch.full((max_episode + 1,), -1, dtype=torch.int64)
+            for episode, task_id in episode_to_task_id.items():
+                episode_task_lookup[episode] = task_id
         episodes = payload["episode_num"].to(dtype=torch.int64)
         steps = payload["step_in_episode"].to(dtype=torch.int64)
         feature_ids = payload["top_feature_ids"].to(dtype=torch.int64)
         feature_values = payload["top_feature_vals"].to(dtype=torch.float32)
         counters["rows_seen"] += int(episodes.shape[0])
+
+        episode_allowed = torch.ones_like(episodes, dtype=torch.bool)
+        if allowed_episode_nums is not None:
+            episode_allowed = torch.isin(
+                episodes, torch.tensor(sorted(allowed_episode_nums), dtype=torch.int64)
+            )
+            counters["rows_skipped_episode_filter"] += int((~episode_allowed).sum().item())
 
         episode_in_range = (episodes >= 0) & (episodes <= max_episode)
         row_task_ids = torch.full_like(episodes, -1)
@@ -602,9 +667,9 @@ def _load_openvla_timestep_vectors_streaming(
         task_in_range = (row_task_ids >= 0) & (row_task_ids < len(allowed_tasks))
         task_allowed = torch.zeros_like(task_in_range)
         task_allowed[task_in_range] = allowed_tasks[row_task_ids[task_in_range]]
-        valid_task = episode_in_range & task_allowed
+        valid_task = episode_allowed & episode_in_range & task_allowed
         valid = valid_task & (steps >= 0)
-        counters["rows_skipped_unknown_task"] += int((~valid_task).sum().item())
+        counters["rows_skipped_unknown_task"] += int((episode_allowed & ~valid_task).sum().item())
         counters["rows_skipped_no_effective_step"] += int(
             (valid_task & (steps < 0)).sum().item()
         )
@@ -672,6 +737,7 @@ def score_cluster_features(
     top_n: int = 20,
     step_mapping: str = "auto",
     prompt_records_path: Path | None = None,
+    allowed_episode_nums: set[int] | None = None,
 ) -> dict:
     """Build the event-feature score matrices and save a single `.pt`
     payload. Mirrors openpi-mech ``build_openpi_feature_score_matrix.py``.
@@ -686,6 +752,12 @@ def score_cluster_features(
     ``step_mapping`` defaults to ``"auto"``: pick per ``manifest.capture_target``
     (``action_executed`` for ``action_expert``, ``chunk_executed`` for
     ``paligemma``, otherwise ``inference_step``).
+
+    ``allowed_episode_nums`` restricts every event/window/task-mean input
+    to discovery episodes. Cluster coverage is recomputed against all
+    allowed episodes of the task, including those without events. Mapping
+    every allowed episode requires events, prompt records, or shard task IDs.
+    Omitting the argument preserves the original whole-run behavior.
     """
     topk_run_dir = Path(topk_run_dir).resolve()
     event_features_path = Path(event_features_path).resolve()
@@ -707,9 +779,63 @@ def score_cluster_features(
     if step_mapping == "auto":
         step_mapping = _default_step_mapping(capture_target)
 
+    event_features = load_jsonl(event_features_path)
+    cluster_assignments = load_jsonl(cluster_assignments_path)
+    prompt_records = (
+        load_jsonl(Path(prompt_records_path).resolve()) if prompt_records_path is not None else []
+    )
+    discovery_episode_to_task_id: dict[int, int] = {}
+    event_features_skipped_episode_filter = 0
+    if allowed_episode_nums is not None:
+        requested = list(allowed_episode_nums)
+        if not requested or any(isinstance(ep, bool) or not isinstance(ep, int) or ep < 0 for ep in requested):
+            raise ValueError("allowed_episode_nums must contain nonnegative integer episode IDs.")
+        if len(set(requested)) != len(requested):
+            raise ValueError("Duplicate episode_num in allowed_episode_nums.")
+        allowed_episode_nums = set(requested)
+        excluded_sample_ids = {
+            str(record["sample_id"])
+            for record in event_features
+            if int(record["episode_num"]) not in allowed_episode_nums
+        }
+        selected_features = [
+            record for record in event_features if int(record["episode_num"]) in allowed_episode_nums
+        ]
+        if excluded_sample_ids & {str(record["sample_id"]) for record in selected_features}:
+            raise ValueError("Duplicate sample_id spans discovery and excluded episodes.")
+        event_features_skipped_episode_filter = len(event_features) - len(selected_features)
+        event_features = selected_features
+        cluster_assignments = [
+            record for record in cluster_assignments if str(record["sample_id"]) not in excluded_sample_ids
+        ]
+        sample_ids = [str(record["sample_id"]) for record in cluster_assignments]
+        if len(sample_ids) != len(set(sample_ids)):
+            raise ValueError("Duplicate sample_id in discovery cluster assignments.")
+        prompt_records = [
+            record for record in prompt_records if int(record["episode_num"]) in allowed_episode_nums
+        ]
+        identities: dict[int, dict] = {}
+        episode_by_task_trial: dict[tuple[int, int], int] = {}
+        for record in event_features + prompt_records:
+            episode, task_id = int(record["episode_num"]), int(record["task_id"])
+            _record_episode_task(discovery_episode_to_task_id, episode, task_id)
+            identity = identities.setdefault(episode, {})
+            for name in ("task_episode_idx", "task_description"):
+                if record.get(name) is None:
+                    continue
+                value = int(record[name]) if name == "task_episode_idx" else str(record[name])
+                if name in identity and identity[name] != value:
+                    raise ValueError(f"Conflicting {name} for discovery episode_num={episode}")
+                identity[name] = value
+            if "task_episode_idx" in identity:
+                key = (task_id, identity["task_episode_idx"])
+                previous = episode_by_task_trial.setdefault(key, episode)
+                if previous != episode:
+                    raise ValueError(f"Duplicate discovery task/episode identity {key}: {previous}, {episode}")
+
     join = join_cluster_events(
-        event_features=load_jsonl(event_features_path),
-        cluster_assignments=load_jsonl(cluster_assignments_path),
+        event_features=event_features,
+        cluster_assignments=cluster_assignments,
         cluster_annotations=(
             load_jsonl(cluster_annotations_path) if cluster_annotations_path is not None else None
         ),
@@ -758,8 +884,10 @@ def score_cluster_features(
     # fall back to the event-only mapping if not provided (paper-style
     # task_mean will be approximated).
     episode_to_task_id: dict[int, int] = dict(event_episode_to_task_id)
+    if allowed_episode_nums is not None:
+        episode_to_task_id.update(discovery_episode_to_task_id)
     if prompt_records_path is not None:
-        for record in load_jsonl(Path(prompt_records_path).resolve()):
+        for record in prompt_records:
             ep = int(record["episode_num"])
             tid = int(record["task_id"])
             episode_to_task_id[ep] = tid
@@ -770,6 +898,7 @@ def score_cluster_features(
         for event in usable_events
         for step in event["window_steps"]
     }
+    contributing_episode_nums: set[int] = set()
     timestep_vectors, task_means, task_counts, _manifest, load_counters = _load_timestep_vectors(
         topk_run_dir,
         step_mapping=step_mapping,
@@ -777,7 +906,39 @@ def score_cluster_features(
         task_id_set=task_id_set,
         dict_size=dict_size,
         required_timestep_keys=required_timestep_keys,
+        allowed_episode_nums=allowed_episode_nums,
+        contributing_episode_nums=contributing_episode_nums,
     )
+
+    discovery_task_episode_counts: dict[int, int] = defaultdict(int)
+    if allowed_episode_nums is not None:
+        missing = allowed_episode_nums - episode_to_task_id.keys()
+        if missing:
+            raise ValueError(f"Missing task mapping for discovery episode_nums: {sorted(missing)}")
+        for episode in allowed_episode_nums:
+            discovery_task_episode_counts[episode_to_task_id[episode]] += 1
+        missing_tasks = set(discovery_task_episode_counts) - task_id_set
+        if missing_tasks:
+            raise ValueError(f"No usable clustered events for discovery task_ids: {sorted(missing_tasks)}")
+        missing_timesteps = allowed_episode_nums - contributing_episode_nums
+        if missing_timesteps:
+            raise ValueError(
+                "No valid activation timesteps for discovery episode_nums: "
+                f"{sorted(missing_timesteps)}"
+            )
+        cluster_task_ids: dict[str, int] = {}
+        for event in join.selected_events:
+            cluster_id, task_id = str(event["cluster_id"]), int(event["task_id"])
+            previous = cluster_task_ids.setdefault(cluster_id, task_id)
+            if previous != task_id:
+                raise ValueError(f"Conflicting task_id for discovery cluster_id={cluster_id}")
+            if event["task_description"] != join.cluster_metadata_by_id[cluster_id]["task_description"]:
+                raise ValueError(f"Task description mismatch for discovery cluster_id={cluster_id}")
+        for cluster_id, task_id in cluster_task_ids.items():
+            meta = join.cluster_metadata_by_id[cluster_id]
+            denominator = discovery_task_episode_counts[task_id]
+            meta["total_task_episodes"] = denominator
+            meta["episode_coverage"] = meta["num_episodes"] / denominator
 
     # ---- score per event ----
     episode_group_scores: dict[tuple[str, int], dict[str, list[torch.Tensor]]] = defaultdict(
@@ -831,6 +992,15 @@ def score_cluster_features(
         )
     if not selected_event_payloads:
         raise RuntimeError("No events remained after activation-window filtering.")
+    if allowed_episode_nums is not None:
+        missing_tasks = set(discovery_task_episode_counts) - {
+            int(event["task_id"]) for event in selected_event_payloads
+        }
+        if missing_tasks:
+            raise ValueError(
+                "No scored activation windows for discovery task_ids: "
+                f"{sorted(missing_tasks)}"
+            )
 
     # ---- aggregate per (cluster, episode) → per cluster ----
     row_scores: dict[str, list[torch.Tensor]] = defaultdict(list)
@@ -906,6 +1076,9 @@ def score_cluster_features(
             "layer": manifest.get("layer"),
             "sae_path": manifest.get("sae_path"),
             "capture_target": capture_target,
+            "prompt_records_path": str(Path(prompt_records_path).resolve()) if prompt_records_path is not None else None,
+            "allowed_episode_nums": sorted(allowed_episode_nums) if allowed_episode_nums is not None else None,
+            "episode_filter": "allowed_episode_nums_v1" if allowed_episode_nums is not None else None,
         },
         "window_size": window_size,
         "top_n": top_n,
@@ -928,6 +1101,10 @@ def score_cluster_features(
             "selected_events_after_activation_filter": len(selected_event_payloads),
             "skipped_missing_window_vectors": skipped_missing_window_vectors,
             "task_timestep_counts": dict(task_counts),
+            "event_features_skipped_episode_filter": event_features_skipped_episode_filter,
+            "discovery_episode_count": len(allowed_episode_nums) if allowed_episode_nums is not None else None,
+            "discovery_task_episode_counts": dict(discovery_task_episode_counts),
+            "discovery_episode_count_with_timesteps": len(contributing_episode_nums) if allowed_episode_nums is not None else None,
             **load_counters,
         },
         "selected_events": selected_event_payloads,

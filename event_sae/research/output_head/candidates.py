@@ -6,17 +6,13 @@ only when requested. Missing optional matrices never masquerade as event scores.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 import random
 import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-
-def _hash(value: Any) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+from .provenance import fingerprint as _hash
 
 
 def _id(value: Any) -> int:
@@ -286,6 +282,16 @@ identity_features/identity_cases. It never starts execution or drops candidates.
         if not eval_manifest.get("split_manifest_hash") or overlap is not False:
             raise ValueError("Confirmatory evaluation requires a disjoint declared split")
         validate_score_scope(scores.get("scope", {}), {"split_manifest_hash": eval_manifest["split_manifest_hash"]})
+    elif mode == "followup":
+        if (eval_manifest.get("frozen_before_followup_evaluation") is not True
+                or eval_manifest.get("frozen_before_pilot") is True
+                or not eval_manifest.get("frozen_at_utc")):
+            raise ValueError("Followup evaluation requires a new frozen split without backdating the pilot")
+        if not eval_manifest.get("split_manifest_hash") or overlap is not False:
+            raise ValueError("Followup evaluation requires a disjoint declared split")
+        if not isinstance(eval_manifest.get("historical_state_identity_verified"), bool):
+            raise ValueError("Followup evaluation must declare historical state identity availability")
+        validate_score_scope(scores.get("scope", {}), {"split_manifest_hash": eval_manifest["split_manifest_hash"]})
     elif mode != "pilot":
         raise ValueError("Unknown evaluation mode")
     unique_ids = sorted(memberships)
@@ -310,10 +316,15 @@ identity_features/identity_cases. It never starts execution or drops candidates.
         reasons.append(f"unique_features {len(unique_ids)} exceeds max_unique_features {cap}")
     if total > rollout_cap:
         reasons.append(f"total_rollouts {total} exceeds max_total_rollouts {rollout_cap}")
+    # JSON object keys are strings. Freeze that representation before signing:
+    # integer IDs sort numerically here but lexicographically after reload
+    # (e.g. 2 and 10), otherwise invalidating both hashes and exact resume checks.
+    serialized_vectors = {method: {str(feature): value for feature, value in vector.items()}
+                          for method, vector in vectors.items()}
     plan = {"schema_version": "output_head_rollout_plan_v1", "synthetic": bool(scores.get("synthetic", False)),
             "status": "blocked_budget" if reasons else "planned", "blocked_reasons": reasons,
             "methods": methods, "top_k": top_k, "method_topk": top_ids, "audit_feature_ids": audit_ids,
-            "feature_ids": unique_ids, "candidates": candidates, "score_vectors": vectors,
+            "feature_ids": unique_ids, "candidates": candidates, "score_vectors": serialized_vectors,
             "feature_universe": sorted(universe), "scope": dict(scores.get("scope", {})),
             "mode": mode, "selection_eval_overlap": overlap,
             "evaluation_labels_previously_used": eval_manifest.get("evaluation_labels_previously_used"),

@@ -12,7 +12,11 @@ from typing import Any, Iterable
 
 
 def fingerprint(payload: Any) -> str:
-    """Hash strict canonical JSON; non-finite scientific values must be null."""
+    """Hash strict sorted JSON; non-finite scientific values must be null.
+
+    Persisted payloads must use string object keys before hashing. Keep this
+    historical encoding unchanged so existing artifact digests stay verifiable.
+    """
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"),
                          ensure_ascii=True, allow_nan=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

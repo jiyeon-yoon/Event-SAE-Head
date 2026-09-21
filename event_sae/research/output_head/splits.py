@@ -12,6 +12,7 @@ import json
 import random
 import re
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -81,10 +82,15 @@ Required record fields are suite/task_id/task_episode_idx/initial_state_sha256.
 Hash provenance must be explicit on the source manifest or each record.
 ``evaluation_labels_previously_used=None`` is permitted when freezing, but
 ``validate_split_manifest(..., require_confirmatory=True)`` will reject it.
+Whether freezing preceded the pilot must also be explicitly declared; creating
+a manifest now cannot establish that historical fact.
 """
     records, metadata = _source(source_episode_manifest)
     if not isinstance(split_spec, Mapping):
         raise ValueError("split_spec must be a mapping")
+    frozen_before_pilot = split_spec.get("frozen_before_pilot")
+    if frozen_before_pilot is not None and not isinstance(frozen_before_pilot, bool):
+        raise ValueError("frozen_before_pilot must be true, false, or null")
     names = ("discovery", "validation", "evaluation")
     counts = {name: _int(split_spec.get(f"{name}_per_task"), f"{name}_per_task") for name in names}
     if counts["discovery"] == 0 or counts["evaluation"] == 0:
@@ -129,7 +135,7 @@ Hash provenance must be explicit on the source manifest or each record.
     history = True if True in evaluation_history else (None if None in evaluation_history else False)
     manifest = {
         "schema_version": "output_head_split_v1", "frozen": True,
-        "frozen_before_pilot": split_spec.get("frozen_before_pilot", True),
+        "frozen_before_pilot": frozen_before_pilot,
         "split_seed": seed, "algorithm": "python_random_per_task_sha256_seed_v1",
         "counts_per_task": counts, "source_manifest_hash": _digest({"records": sorted(records, key=episode_key), "metadata": metadata}),
         "splits": assignments, "evaluation_labels_previously_used": history,
@@ -142,15 +148,75 @@ Hash provenance must be explicit on the source manifest or each record.
     return manifest
 
 
-def validate_split_manifest(manifest: Mapping[str, Any], *, require_confirmatory: bool = False) -> dict:
+def build_followup_split(source_episode_manifest: Any, split_spec: Mapping[str, Any]) -> dict:
+    """Freeze a new, explicitly non-confirmatory study after an earlier pilot.
+
+    Current LIBERO state hashes protect the upcoming runs. They do not establish
+    the state bytes used by historical activation collection. Preserve both
+    identities so this limitation cannot disappear when scores are exported.
+    """
+    records, metadata = _source(source_episode_manifest)
+    if split_spec.get("frozen_before_pilot") is True:
+        raise ValueError("A followup split cannot be backdated before the old pilot")
+    for row in records:
+        current = row.get("current_runtime_state_sha256")
+        if current != row.get("initial_state_sha256"):
+            raise ValueError("Followup requires matching current runtime registry state hashes")
+        historical = row.get("historical_initial_state_sha256")
+        if historical is not None and historical != current:
+            raise ValueError("Historical source state differs from current registered state")
+        if not row.get("initial_state_hash_provenance", metadata.get("initial_state_hash_provenance")):
+            raise ValueError("Followup requires explicit current-state registry provenance")
+    verified = metadata.get("historical_state_identity_verified") is True
+    if verified and any(row.get("historical_initial_state_sha256") is None for row in records):
+        raise ValueError("Historical state verification requires original hashes for every episode")
+    result = build_split_manifest({**metadata, "episodes": records},
+                                  {**split_spec, "frozen_before_pilot": False})
+    result.update(schema_version="output_head_followup_split_v1", mode="followup",
+                  frozen_at_utc=datetime.now(timezone.utc).isoformat(),
+                  frozen_before_followup_evaluation=True,
+                  historical_state_identity_verified=verified,
+                  historical_source_state_status="verified" if verified else "unavailable",
+                  initial_state_identity="suite/task_id/current_runtime_state_sha256",
+                  generalization_scope="post_pilot_followup_fixed_pretrained_sae_not_confirmatory")
+    result["manifest_hash"] = _digest({key: value for key, value in result.items() if key != "manifest_hash"})
+    validate_split_manifest(result, require_followup=True)
+    return result
+
+
+def validate_split_manifest(manifest: Mapping[str, Any], *, require_confirmatory: bool = False,
+                            require_followup: bool = False) -> dict:
     """Check immutable membership, duplicate states, exact counts, and history."""
-    if not isinstance(manifest, Mapping) or manifest.get("schema_version") != "output_head_split_v1":
+    schemas = {"output_head_split_v1", "output_head_followup_split_v1"}
+    if not isinstance(manifest, Mapping) or manifest.get("schema_version") not in schemas:
         raise ValueError("unsupported split manifest")
+    is_followup = manifest.get("schema_version") == "output_head_followup_split_v1"
+    if require_confirmatory and is_followup:
+        raise ValueError("Followup splits cannot qualify as confirmatory")
+    if require_followup and not is_followup:
+        raise ValueError("Followup execution requires an explicitly frozen followup split")
     expected = manifest.get("manifest_hash")
     if not expected or _digest({k: v for k, v in manifest.items() if k != "manifest_hash"}) != expected:
         raise ValueError("split manifest hash mismatch")
     if manifest.get("frozen") is not True:
         raise ValueError("split is not frozen")
+    if is_followup:
+        if (manifest.get("mode") != "followup" or manifest.get("frozen_before_pilot") is not False
+                or manifest.get("frozen_before_followup_evaluation") is not True):
+            raise ValueError("Followup must be frozen now without backdating the old pilot")
+        try:
+            frozen_at = datetime.fromisoformat(manifest["frozen_at_utc"])
+            if frozen_at.tzinfo is None or frozen_at > datetime.now(timezone.utc):
+                raise ValueError("invalid freeze time")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Followup requires a valid UTC freeze timestamp") from exc
+        if not isinstance(manifest.get("historical_state_identity_verified"), bool):
+            raise ValueError("Followup must declare historical state verification")
+        expected_status = "verified" if manifest["historical_state_identity_verified"] else "unavailable"
+        if (manifest.get("historical_source_state_status") != expected_status
+                or manifest.get("initial_state_identity") != "suite/task_id/current_runtime_state_sha256"
+                or manifest.get("generalization_scope") != "post_pilot_followup_fixed_pretrained_sae_not_confirmatory"):
+            raise ValueError("Followup state identity or study scope is inconsistent")
     seen_episodes, seen_states = set(), set()
     task_sets = []
     splits = manifest.get("splits", {})
@@ -161,6 +227,16 @@ def validate_split_manifest(manifest: Mapping[str, Any], *, require_confirmatory
         counts: dict[tuple, int] = defaultdict(int)
         for row in rows:
             key, state = episode_key(row), _state_key(row)
+            if is_followup:
+                if row.get("current_runtime_state_sha256") != state[2]:
+                    raise ValueError("Followup current runtime state hash mismatch")
+                historical = row.get("historical_initial_state_sha256")
+                if historical is not None and historical != state[2]:
+                    raise ValueError("Followup historical state contradicts the registry")
+                if manifest["historical_state_identity_verified"] and historical is None:
+                    raise ValueError("Followup historical state verification lacks source evidence")
+                if not row.get("initial_state_hash_provenance"):
+                    raise ValueError("Followup current-state provenance is missing")
             if key in seen_episodes or state in seen_states:
                 raise ValueError("episode or initial state overlaps splits")
             seen_episodes.add(key)
@@ -188,9 +264,11 @@ def validate_split_manifest(manifest: Mapping[str, Any], *, require_confirmatory
 
 
 def validate_selection_split(manifest: Mapping[str, Any], episode_rows: Sequence[Mapping[str, Any]],
-                             *, stage: str = "pilot", labels_used: bool | None = None) -> dict:
+                             *, stage: str = "pilot", labels_used: bool | None = None,
+                             mode: str | None = None) -> dict:
     """Enforce discovery-only scoring and sealed evaluation states in pilot."""
-    validate_split_manifest(manifest, require_confirmatory=True)
+    validate_split_manifest(manifest, require_confirmatory=mode != "followup",
+                            require_followup=mode == "followup")
     allowed = {"score": ("discovery",), "pilot": ("discovery", "validation"),
                "validation": ("validation",), "evaluation": ("evaluation",)}
     if stage not in allowed:

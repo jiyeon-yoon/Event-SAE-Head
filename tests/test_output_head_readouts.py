@@ -144,6 +144,7 @@ def test_confirmatory_sampling_filters_before_episode_sampling():
                 for episode in range(6)]
     split = build_split_manifest({"episodes": episodes, "initial_state_hash_provenance": "synthetic"},
                                  {"discovery_per_task": 3, "validation_per_task": 1,
+                                  "frozen_before_pilot": True,
                                   "evaluation_per_task": 2, "evaluation_labels_previously_used": False})
     result = build_readout_manifest(rows, {"mode": "confirmatory", "split_manifest": split},
                                     generation(), source_episodes=episodes)

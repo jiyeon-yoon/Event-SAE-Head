@@ -83,15 +83,16 @@ def _capture_case_specs(cfg: dict) -> list[dict]:
         raise ValueError("Validation budget cannot accommodate one four-condition input")
     task_ids = task_ids[:max_inputs]
     split_path = cfg["sampling"]["split_manifest"]
-    if cfg["sampling"]["mode"] == "confirmatory" and not split_path:
-        raise ValueError("Confirmatory input capture requires a frozen split manifest")
+    mode = cfg["sampling"]["mode"]
+    if mode in {"confirmatory", "followup"} and not split_path:
+        raise ValueError(f"{mode} input capture requires a frozen split manifest")
     if not split_path:
         return [{"task_id": task_id, "task_episode_idx": 0, "expected_state_hash": None}
                 for task_id in task_ids]
 
     from .splits import validate_split_manifest
     split = read_json(split_path)
-    validate_split_manifest(split, require_confirmatory=True)
+    validate_split_manifest(split, require_confirmatory=mode != "followup", require_followup=mode == "followup")
     allowed = split["splits"]["discovery"] + split["splits"]["validation"]
     specs = []
     for task_id in task_ids:
@@ -265,7 +266,8 @@ def capture_runtime_inputs(cfg: dict, config_path: str | Path, *, allow_simulato
         raise ValueError("Captured calls do not satisfy the four-condition validation budget")
     if cfg["sampling"]["split_manifest"]:
         from .splits import validate_selection_split
-        validate_selection_split(read_json(cfg["sampling"]["split_manifest"]), episodes, stage="pilot")
+        validate_selection_split(read_json(cfg["sampling"]["split_manifest"]), episodes, stage="pilot",
+                                 mode=cfg["sampling"]["mode"])
     fixture = {
         "schema_version": SCHEMA, "synthetic": synthetic_runtime,
         "model_revision": cfg["model"]["revision"],

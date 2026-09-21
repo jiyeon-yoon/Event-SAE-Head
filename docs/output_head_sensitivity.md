@@ -1,5 +1,7 @@
 # OpenVLA 출력층 민감도: 구현 및 실행 안내
 
+전체 10-task 후속 실행은 [현재 실행 안내](run_output_head_full10.md)를 따른다.
+
 ## 구현 범위와 현재 실행 상태
 
 기존 OpenVLA 마지막 decoder residual에서 feature 하나를 제거한 뒤, 실제 final
@@ -10,6 +12,8 @@ norm과 lm_head의 full-vocabulary 분포 변화를 계산한다. 주 점수는
 2026-09-20에 M0~M3 코드를 구현했고, 2026-09-21에 RTX 4090에서 M4 pilot을
 실행했다. 전체 명령·artifact·결과는
 [출력층 민감도 pilot 재현 기록](reproduce_output_head_sensitivity_pilot.md)에 있다.
+Pod 종료 후 복구와 다음 실험 준비는
+[재시작 안내](resume_output_head_sensitivity.md)를 참고한다.
 
 | 단계 | 현재 상태 | 실제 확인 범위 |
 |---|---|---|
@@ -167,6 +171,8 @@ python scripts/openvla/output_head_sensitivity.py plan --config configs/local/he
 
 `split`이 만든 manifest를 `sampling.split_manifest`에 연결하고, 그 evaluation subset으로
 `rollout.eval_manifest`를 만든다. Pilot 시에는 discovery/validation만 사용한다.
+`splits.frozen_before_pilot`은 기본 `null`이며, 당시 실제 동결 이력이 확인될 때만
+명시한다. split 파일을 지금 만드는 것이 과거 pilot 이전 동결의 증거는 아니다.
 평가 manifest 형식은 다음과 같다.
 
 ```json

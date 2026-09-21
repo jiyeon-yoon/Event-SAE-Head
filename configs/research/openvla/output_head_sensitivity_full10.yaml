@@ -1,0 +1,52 @@
+# Full-suite FOLLOW-UP preset. headfull.py setup fills paths and freezes splits.
+# load_config merges unspecified fields with output_head.config.DEFAULTS.
+# Before use: verified source identities, a prospectively frozen split, exact
+# discovery-only Event scores, and fresh head/edit parity are required.
+# The historical task-0/1 pilot is exploratory; do not backdate its split.
+schema_version: output_head_sensitivity_v1
+experiment_name: openvla_l31_full10_followup_25_5_20
+inputs:
+  dense_dir: null
+  source_episode_manifest: null
+  sae_checkpoint: null
+  event_scores_path: null
+  generation_manifest: null
+  local_model_snapshot: null
+  output_head_bundle: null
+  head_export_metadata: null
+  runtime_inputs: null
+splits:
+  split_seed: 2026
+  discovery_per_task: 25
+  validation_per_task: 5
+  evaluation_per_task: 20
+  frozen_before_pilot: false
+  evaluation_labels_previously_used: null
+sampling:
+  mode: followup
+  split_manifest: null
+  sample_seed: 2026
+  task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  max_episodes_per_task: 25
+  max_steps_per_episode: 8
+scoring:
+  device: cuda:0
+  max_scored_pairs: 2000000
+selection:
+  methods:
+  - event_aligned
+  - head_full_vocab_kl_fixed_prefix
+  - mean_readout_activation
+  - readout_activation_frequency
+  top_k: 3
+  random_audit_features: 6
+  random_seed: 2026
+  max_unique_features: 18
+rollout:
+  execute: false
+  eval_manifest: null
+  max_total_rollouts: 4000
+output:
+  root_dir: null
+  overwrite: false
+  resume: true

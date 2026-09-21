@@ -49,7 +49,7 @@ def _load_records(value: Any) -> tuple[list[dict], Path | None]:
     return [dict(row) for row in value], path
 
 
-def _generation(spec: Mapping[str, Any]) -> dict:
+def _generation(spec: Mapping[str, Any], *, mode: str = "pilot") -> dict:
     if not isinstance(spec, Mapping):
         raise ValueError("generation_spec is required")
     result = dict(spec)
@@ -64,6 +64,14 @@ def _generation(spec: Mapping[str, Any]) -> dict:
     evidence = result.get("evidence")
     if not evidence or not isinstance(evidence, (str, dict)):
         raise ValueError("batch/padding/generation evidence is required")
+    interpretation = result.get("schema_version") == "output_head_generation_interpretation_v1"
+    unverified = isinstance(evidence, dict) and evidence.get("historical_runtime_flags_verified") is False
+    if (interpretation or unverified) and mode != "followup":
+        raise ValueError("Unverified historical generation interpretation is permitted only in followup mode")
+    if interpretation:
+        assumptions = {"batch_size": 1, "padding": "none", "use_cache": True}
+        if not unverified or evidence.get("mapping_assumptions") != assumptions:
+            raise ValueError("Generation interpretation must retain its unverified mapping assumptions")
     if result.get("index_scope", "complete") not in {"complete", "subset"}:
         raise ValueError("index_scope must be complete or subset")
     return result
@@ -118,8 +126,9 @@ evidence. Numeric gaps in global_forward_idx are reported, not guessed away.
 Malformed records, ambiguous identities, and overlapping ranges always fail.
 ``strict=False`` may exclude malformed *step groups*, with explicit reporting.
 """
-    spec = _generation(generation_spec)
     sample_spec = dict(sample_spec)
+    mode = sample_spec.get("mode", "pilot")
+    spec = _generation(generation_spec, mode=mode)
     records, index_path = _load_records(index_path_or_records)
     root = Path(dense_dir) if dense_dir is not None else (index_path.parent if index_path else None)
     episode_lookup: dict[tuple, dict] = {}
@@ -141,7 +150,9 @@ Malformed records, ambiguous identities, and overlapping ranges always fail.
         run = _identity(row, spec)
         episode_num = _integer(row.get("episode_num"), "episode_num")
         extra = episode_lookup.get((run, episode_num), {})
-        for field in ("task_id", "task_episode_idx", "initial_state_sha256", "suite"):
+        for field in ("task_id", "task_episode_idx", "initial_state_sha256", "suite",
+                      "current_runtime_state_sha256", "historical_initial_state_sha256",
+                      "initial_state_hash_provenance", "historical_state_identity_verified"):
             if field in extra:
                 if row.get(field) is not None and row[field] != extra[field]:
                     raise ValueError(f"index and source episode disagree on {field}")
@@ -225,18 +236,18 @@ Malformed records, ambiguous identities, and overlapping ranges always fail.
             mapped.append({**row, "action_dim_index": action_dim})
     if not mapped:
         raise ValueError("no complete action queries remain")
-    mode = sample_spec.get("mode", "pilot")
-    if mode not in {"pilot", "confirmatory"}:
-        raise ValueError("sampling mode must be pilot or confirmatory")
+    if mode not in {"pilot", "confirmatory", "followup"}:
+        raise ValueError("sampling mode must be pilot, confirmatory, or followup")
     split = sample_spec.get("split_manifest")
-    if mode == "confirmatory" and split is None:
-        raise ValueError("confirmatory sampling requires a pre-frozen split manifest")
+    if mode in {"confirmatory", "followup"} and split is None:
+        raise ValueError(f"{mode} sampling requires a frozen split manifest")
     if split is not None:
         from .splits import episode_key, validate_split_manifest
         if isinstance(split, (str, Path)):
             with Path(split).open(encoding="utf-8") as stream:
                 split = json.load(stream)
-        validate_split_manifest(split, require_confirmatory=True)
+        validate_split_manifest(split, require_confirmatory=mode != "followup",
+                                require_followup=mode == "followup")
         # Score computation always uses discovery, even during a protected pilot.
         members = {episode_key(row): row for row in split["splits"]["discovery"]}
         filtered = []
@@ -245,6 +256,10 @@ Malformed records, ambiguous identities, and overlapping ranges always fail.
             if member is not None:
                 if row.get("initial_state_sha256") != member["initial_state_sha256"]:
                     raise ValueError("readout state hash does not match frozen discovery manifest")
+                if mode == "followup" and any(row.get(key) != member.get(key) for key in (
+                        "current_runtime_state_sha256", "historical_initial_state_sha256",
+                        "initial_state_hash_provenance")):
+                    raise ValueError("readout state provenance does not match frozen followup discovery")
                 filtered.append(row)
         mapped = filtered
         if not mapped:
@@ -281,6 +296,10 @@ Malformed records, ambiguous identities, and overlapping ranges always fail.
         discovery_episodes[row["episode_uid"]] = {
             key: row.get(key) for key in ("source_run_id", "suite", "task_id", "task_episode_idx",
                                          "episode_uid", "initial_state_sha256")}
+        if mode == "followup":
+            discovery_episodes[row["episode_uid"]].update({key: row.get(key) for key in (
+                "current_runtime_state_sha256", "historical_initial_state_sha256",
+                "initial_state_hash_provenance")})
     discovery = [discovery_episodes[key] for key in sorted(discovery_episodes)]
     gap_counts = {}
     for run, values in forwards.items():
@@ -303,6 +322,17 @@ Malformed records, ambiguous identities, and overlapping ranges always fail.
                 "source_shards": shard_inventory, "dense_dir": str(root.absolute()) if root else None,
                 "indexed_shard_rows": {key: max(end for _, end in ranges) for key, ranges in intervals.items()},
                 "synthetic": sample_spec.get("synthetic", False)}
+    if mode == "followup":
+        manifest["state_identity_scope"] = {
+            "mode": "followup", "historical_state_identity_verified": split["historical_state_identity_verified"],
+            "historical_source_state_status": split["historical_source_state_status"],
+            "initial_state_identity": split["initial_state_identity"],
+            "generalization_scope": split["generalization_scope"],
+            "historical_runtime_flags_verified": (spec["evidence"].get("historical_runtime_flags_verified")
+                                                    if isinstance(spec["evidence"], dict) else None),
+            "generation_mapping_scope": (spec["evidence"].get("scope")
+                                          if isinstance(spec["evidence"], dict) else None),
+        }
     manifest["mapping_hash"] = _digest({"index": manifest["source_index_hash"], "generation": spec,
                                         "mapping_version": MAPPING_VERSION})
     manifest["sample_hash"] = _digest({"mapping_hash": manifest["mapping_hash"], "sample": sample_spec,
@@ -310,9 +340,10 @@ Malformed records, ambiguous identities, and overlapping ranges always fail.
     return manifest
 
 
-def audit_readout_index(index_path_or_records: Any, generation_spec: Mapping[str, Any], **kwargs: Any) -> dict:
+def audit_readout_index(index_path_or_records: Any, generation_spec: Mapping[str, Any],
+                         *, sample_spec: Mapping[str, Any] | None = None, **kwargs: Any) -> dict:
     """Audit all metadata, reporting bad query groups without reading tensors."""
-    return build_readout_manifest(index_path_or_records, {}, generation_spec, strict=False, **kwargs)["audit"]
+    return build_readout_manifest(index_path_or_records, sample_spec or {}, generation_spec, strict=False, **kwargs)["audit"]
 
 
 def _atomic_tensor(path: Path, payload: dict) -> None:

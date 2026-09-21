@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from event_sae.openvla.eval.config import EnvConfig, RunConfig, resolve_trial_indices
-from event_sae.research.output_head.config import DEFAULTS, validate_config
+from event_sae.research.output_head.config import DEFAULTS, load_config, validate_config
 from event_sae.research.output_head.provenance import (
     assert_compatible, assert_safe_output, atomic_write_json, fingerprint, read_json,
 )
@@ -68,6 +68,17 @@ def test_defaults_and_path_protection(tmp_path):
         assert_safe_output(tmp_path, [source / "ae.pt"])
 
 
+@pytest.mark.parametrize("value", [None, False, True])
+def test_explicit_freeze_history_config(value):
+    assert validate_config({"splits": {"frozen_before_pilot": value}})["splits"]["frozen_before_pilot"] is value
+
+
+@pytest.mark.parametrize("value", [0, 1, "true", "false", [], {}])
+def test_freeze_history_config_rejects_non_boolean_values(value):
+    with pytest.raises(ValueError, match="frozen_before_pilot"):
+        validate_config({"splits": {"frozen_before_pilot": value}})
+
+
 def test_atomic_and_identity(tmp_path):
     path = tmp_path / "result.json"
     atomic_write_json(path, {"identity": "a"})
@@ -79,3 +90,22 @@ def test_atomic_and_identity(tmp_path):
         actual = {field: "old"}
         with pytest.raises(ValueError, match="Stale"):
             assert_compatible(actual, {field: "new"})
+
+
+def test_full10_design_budget_and_unknown_provenance_remain_explicit():
+    root = Path(__file__).resolve().parents[1]
+    cfg = load_config(root / "configs/research/openvla/output_head_sensitivity_full10.yaml")
+    tasks = len(cfg["sampling"]["task_ids"])
+    assert cfg["sampling"]["task_ids"] == list(range(10))
+    split = cfg["splits"]
+    assert sum(split[f"{part}_per_task"] for part in ("discovery", "validation", "evaluation")) == 50
+    assert split["discovery_per_task"] == cfg["sampling"]["max_episodes_per_task"]
+    selection = cfg["selection"]
+    upper_features = len(selection["methods"]) * selection["top_k"] + selection["random_audit_features"]
+    assert upper_features == selection["max_unique_features"] == 18
+    assert (upper_features + 2) * tasks * split["evaluation_per_task"] == cfg["rollout"]["max_total_rollouts"] == 4000
+    assert cfg["rollout"]["execute"] is False
+    assert cfg["sampling"]["mode"] == "followup"
+    assert split["frozen_before_pilot"] is False
+    assert split["evaluation_labels_previously_used"] is None
+    assert cfg["sampling"]["split_manifest"] is None

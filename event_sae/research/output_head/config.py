@@ -29,6 +29,7 @@ DEFAULTS: dict[str, Any] = {
               "allow_download": False},
     "splits": {"split_seed": 2026, "discovery_per_task": 35, "validation_per_task": 5,
                "evaluation_per_task": 10, "require_initial_state_disjoint": True,
+               "frozen_before_pilot": None,
                "evaluation_labels_previously_used": None},
     "sampling": {"mode": "pilot", "split_manifest": None, "sample_seed": 2026,
                  "task_ids": [0, 1], "max_episodes_per_task": 2, "max_steps_per_episode": 8,
@@ -135,8 +136,8 @@ def validate_config(updates: dict) -> dict:
             actual = actual[key]
         if actual != value:
             raise ValueError(f"MVP requires {path}={value!r}")
-    if cfg["sampling"]["mode"] not in ("pilot", "confirmatory"):
-        raise ValueError("sampling.mode must be pilot or confirmatory")
+    if cfg["sampling"]["mode"] not in ("pilot", "confirmatory", "followup"):
+        raise ValueError("sampling.mode must be pilot, confirmatory, or followup")
     if cfg["model"]["expected_live_hidden_dtype"] not in ("bfloat16", "float32", "float16"):
         raise ValueError("Unsupported hidden dtype")
     if cfg["scoring"]["reduction_dtype"] not in ("float32", "float64"):
@@ -171,6 +172,9 @@ def validate_config(updates: dict) -> dict:
             raise ValueError(f"validation.{key} must be nonnegative")
     if cfg["splits"]["evaluation_labels_previously_used"] not in (None, True, False):
         raise ValueError("evaluation_labels_previously_used must be boolean or null")
+    frozen_before_pilot = cfg["splits"]["frozen_before_pilot"]
+    if frozen_before_pilot is not None and not isinstance(frozen_before_pilot, bool):
+        raise ValueError("splits.frozen_before_pilot must be boolean or null")
     if cfg["scoring"]["negative_tolerance"] < 0 or cfg["validation"]["max_argmax_mismatch"] > 1:
         raise ValueError("Invalid KL/parity tolerance")
     root = cfg["output"]["root_dir"]

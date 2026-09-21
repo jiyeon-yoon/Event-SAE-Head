@@ -48,6 +48,16 @@ def verify_approved_plan(cfg: dict, approved_hash: str, expected_revision: str) 
         raise ValueError("Base eval configuration changed after plan approval")
     if plan.get("eval_manifest_hash") != sha256_file(cfg["rollout"]["eval_manifest"]):
         raise ValueError("Evaluation manifest changed after plan approval")
+    if cfg["sampling"]["mode"] in {"confirmatory", "followup"}:
+        from .splits import validate_split_manifest
+        split_path = cfg["sampling"]["split_manifest"]
+        if not split_path:
+            raise ValueError("Execution requires the approved frozen split")
+        split = read_json(split_path)
+        followup = cfg["sampling"]["mode"] == "followup"
+        validate_split_manifest(split, require_confirmatory=not followup, require_followup=followup)
+        if split["manifest_hash"] != plan.get("scope", {}).get("split_manifest_hash"):
+            raise ValueError("Frozen split changed after plan approval")
     code = git_identity(REPO_ROOT)
     if code["dirty"] or code["commit"] != expected_revision:
         raise ValueError("Run requires the exact approved clean code revision")
@@ -68,12 +78,13 @@ def numerical_implementation_fingerprint() -> str:
 def _validate_frozen_split(cfg: dict, cases: list[dict], *, stage: str) -> None:
     from .splits import validate_selection_split, validate_split_manifest
     path = cfg["sampling"]["split_manifest"]
-    if cfg["sampling"]["mode"] == "confirmatory" and not path:
-        raise ValueError("Confirmatory execution requires the pre-pilot frozen split")
+    mode = cfg["sampling"]["mode"]
+    if mode in {"confirmatory", "followup"} and not path:
+        raise ValueError(f"{mode} execution requires its frozen split")
     if path:
         split = read_json(path)
-        validate_split_manifest(split, require_confirmatory=True)
-        validate_selection_split(split, cases, stage=stage)
+        validate_split_manifest(split, require_confirmatory=mode != "followup", require_followup=mode == "followup")
+        validate_selection_split(split, cases, stage=stage, mode=mode)
 
 
 def validate_condition_result(payload: dict, condition: dict, cases: list[dict],
@@ -401,7 +412,7 @@ def run_plan(cfg: dict, approved_hash: str, expected_revision: str) -> dict:
     """Execute frozen, bounded cases through the original all-row eval/hook."""
     plan = verify_approved_plan(cfg, approved_hash, expected_revision)
     cases = plan["eval_cases"]
-    _validate_frozen_split(cfg, cases, stage="evaluation" if cfg["sampling"]["mode"] == "confirmatory" else "pilot")
+    _validate_frozen_split(cfg, cases, stage="evaluation" if cfg["sampling"]["mode"] in {"confirmatory", "followup"} else "pilot")
     identity = numerical_identity(cfg)
     load_parity(cfg, identity)
     snapshot = required_input(cfg, "local_model_snapshot")

@@ -51,6 +51,12 @@ def main() -> None:
         ),
     )
     parser.add_argument("--output-path", required=True, help="Where to save the score matrix .pt payload")
+    parser.add_argument(
+        "--allowed-episodes-path",
+        default=None,
+        help="Optional JSON list of discovery episode_num integers. Restricts events, "
+        "windows, task means, and cluster coverage to these episodes.",
+    )
     parser.add_argument("--window-size", type=int, default=5, help="Half-window size in env steps (default: 5)")
     parser.add_argument("--top-n", type=int, default=20, help="Top-N features to summarize per row (default: 20)")
     parser.add_argument(
@@ -67,6 +73,18 @@ def main() -> None:
     args = parser.parse_args()
     if args.clusters_path is None and args.cluster_annotations_path is None:
         parser.error("provide --clusters-path and/or --cluster-annotations-path")
+    allowed_episode_nums = None
+    if args.allowed_episodes_path is not None:
+        with Path(args.allowed_episodes_path).open(encoding="utf-8") as stream:
+            allowed = json.load(stream)
+        if not isinstance(allowed, list) or not allowed or any(
+            isinstance(episode, bool) or not isinstance(episode, int) or episode < 0
+            for episode in allowed
+        ):
+            parser.error("--allowed-episodes-path must contain a nonempty JSON list of nonnegative integers")
+        if len(set(allowed)) != len(allowed):
+            parser.error("--allowed-episodes-path contains duplicate episode IDs")
+        allowed_episode_nums = set(allowed)
 
     summary = score_cluster_features(
         topk_run_dir=Path(args.topk_run_dir),
@@ -81,6 +99,7 @@ def main() -> None:
         top_n=args.top_n,
         step_mapping=args.step_mapping,
         prompt_records_path=Path(args.prompt_records_path) if args.prompt_records_path else None,
+        allowed_episode_nums=allowed_episode_nums,
     )
     print(json.dumps(summary, indent=2))
 

@@ -97,7 +97,7 @@ def audit_inputs(cfg: dict) -> dict:
     required = {"dense_dir", "sae_checkpoint", "generation_manifest"}
     if set(cfg["selection"]["methods"]) & {"event_aligned", "window_mean", "task_mean"}:
         required.add("event_scores_path")
-    if cfg["sampling"]["mode"] == "confirmatory":
+    if cfg["sampling"]["mode"] in {"confirmatory", "followup"}:
         required.add("source_episode_manifest")
     inventory, blockers = {}, []
     for name, value in cfg["inputs"].items():
@@ -137,6 +137,7 @@ def audit_inputs(cfg: dict) -> dict:
             readout_audit = audit_readout_index(dense / "activation_index.jsonl",
                                                 read_json(required_input(cfg, "generation_manifest")),
                                                 dense_dir=dense,
+                                                sample_spec=cfg["sampling"] if cfg["sampling"]["mode"] == "followup" else None,
                                                 source_episodes=cfg["inputs"]["source_episode_manifest"])
             if readout_audit["excluded_steps"]:
                 blockers.append("Malformed action-query groups found; strict prepare will reject them")
@@ -150,9 +151,20 @@ def audit_inputs(cfg: dict) -> dict:
 
 
 def split_workflow(cfg: dict) -> dict:
-    from .splits import build_split_manifest
-    result = build_split_manifest(required_input(cfg, "source_episode_manifest"), cfg["splits"])
-    write_once_json(output_root(cfg) / "split_manifest.json", result)
+    from .splits import build_followup_split, build_split_manifest, validate_split_manifest
+    path = output_root(cfg) / "split_manifest.json"
+    builder = build_followup_split if cfg["sampling"]["mode"] == "followup" else build_split_manifest
+    result = builder(required_input(cfg, "source_episode_manifest"), cfg["splits"])
+    if cfg["sampling"]["mode"] == "followup" and path.is_file():
+        existing = read_json(path)
+        validate_split_manifest(existing, require_followup=True)
+        # The first freeze time is immutable. Membership/source changes are not
+        # resumable, but the act of checking them must not create a new study.
+        ignore = {"frozen_at_utc", "manifest_hash"}
+        if {k: v for k, v in result.items() if k not in ignore} != {k: v for k, v in existing.items() if k not in ignore}:
+            raise ValueError("Existing followup split differs from current source/spec")
+        return existing
+    write_once_json(path, result)
     return result
 
 
@@ -433,9 +445,14 @@ def score_workflow(cfg: dict) -> dict:
     if cfg["sampling"]["split_manifest"]:
         from .splits import validate_split_manifest
         current_split = read_json(cfg["sampling"]["split_manifest"])
-        validate_split_manifest(current_split, require_confirmatory=True)
+        mode = cfg["sampling"]["mode"]
+        validate_split_manifest(current_split, require_confirmatory=mode != "followup", require_followup=mode == "followup")
         if current_split["manifest_hash"] != sample.get("split_manifest_hash"):
             raise ValueError("Frozen split changed since readout preparation")
+        from .splits import validate_selection_split
+        validate_selection_split(current_split, sample.get("discovery_episodes", []), stage="score", mode=mode)
+    elif cfg["sampling"]["mode"] == "followup":
+        raise ValueError("Followup scoring requires its frozen split")
     if not (root / "readouts" / "manifest.json").is_file():
         raise ValueError("Prepare the readout cache before scoring")
     weights, _ = _sae_paths(cfg)
@@ -474,6 +491,8 @@ def score_workflow(cfg: dict) -> dict:
                        "discovery_manifest_hash": sample["discovery_manifest_hash"],
                        "sample_manifest_hash": sample["sample_hash"],
                        "split_manifest_hash": sample.get("split_manifest_hash")}
+    if cfg["sampling"]["mode"] == "followup":
+        result["scope"]["state_identity_scope"] = sample["state_identity_scope"]
     result["elapsed_seconds"] = time.perf_counter() - started
     result["diagnostics"]["peak_memory_allocated_bytes"] = (
         torch.cuda.max_memory_allocated(cuda_device) if cuda_device is not None else None)
@@ -514,15 +533,25 @@ def plan_workflow(cfg: dict) -> dict:
         overlap = bool({state_key(row) for row in discovery} & {state_key(row) for row in cases})
         if overlap != evaluation["discovery_eval_overlap"]:
             raise ValueError("Declared discovery/evaluation overlap contradicts original trial IDs")
-    if cfg["sampling"]["mode"] == "confirmatory":
+    mode = cfg["sampling"]["mode"]
+    if mode in {"confirmatory", "followup"}:
         from .splits import validate_selection_split
         split_path = cfg["sampling"]["split_manifest"]
         if not split_path:
-            raise ValueError("Confirmatory plan requires its frozen split")
+            raise ValueError(f"{mode} plan requires its frozen split")
         split = read_json(split_path)
-        validate_selection_split(split, cases, stage="evaluation")
+        validate_selection_split(split, cases, stage="evaluation", mode=mode)
+        validate_selection_split(split, discovery, stage="score", mode=mode)
         if evaluation.get("split_manifest_hash") != split["manifest_hash"]:
             raise ValueError("Evaluation plan split hash mismatch")
+        if scores.get("scope", {}).get("split_manifest_hash") != split["manifest_hash"] or sample.get("split_manifest_hash") != split["manifest_hash"]:
+            raise ValueError("Score/sample artifacts do not match the evaluation split")
+        if scores.get("scope", {}).get("discovery_manifest_hash") != sample.get("discovery_manifest_hash"):
+            raise ValueError("Score discovery population differs from prepared readouts")
+        if mode == "followup":
+            for key in ("frozen_at_utc", "frozen_before_followup_evaluation", "historical_state_identity_verified"):
+                if evaluation.get(key) != split.get(key):
+                    raise ValueError(f"Followup evaluation provenance differs from frozen split: {key}")
     comparison_methods = [x for x in cfg["selection"]["methods"]
                           if x in ("event_aligned", "window_mean", "task_mean")]
     comparison = None
@@ -595,6 +624,14 @@ def analyze_workflow(cfg: dict) -> dict:
                 "model_code_revision": cfg["model"]["code_revision"],
                 "code_revision": raw["code"]["commit"], "sae_sha256": score_identity["sae_checkpoint_hash"],
                 "layer_idx": cfg["scope"]["layer_idx"], "hook_start_step": cfg["rollout"]["hook_start_step"]}
+    if cfg["sampling"]["mode"] == "followup":
+        protocol.update(
+            historical_state_identity_verified=plan["eval_manifest"]["historical_state_identity_verified"],
+            historical_source_state_status=("verified" if plan["eval_manifest"]["historical_state_identity_verified"] else "unavailable"),
+            generalization_scope="post_pilot_followup_fixed_pretrained_sae_not_confirmatory",
+            frozen_at_utc=plan["eval_manifest"]["frozen_at_utc"],
+            state_identity_scope=scores.get("scope", {}).get("state_identity_scope", {}),
+        )
     paired = assemble_paired_effects(raw, features, protocol)
     analysis = analyze_prediction(scores, paired, {**cfg["analysis"], "plan": plan,
                                                   "top_k": cfg["selection"]["top_k"]})
@@ -613,6 +650,16 @@ def analyze_workflow(cfg: dict) -> dict:
               f"Previously used evaluation labels: {plan.get('evaluation_labels_previously_used')}.\n\n"
               "See paired_effects.json and analysis.json for measured pairs, missing/undefined "
               "statistics, shared-bootstrap uncertainty and scope. No unmeasured global recall is claimed.\n")
+    if cfg["sampling"]["mode"] == "followup":
+        verified = plan["eval_manifest"]["historical_state_identity_verified"]
+        report += ("\nThis followup split was frozen after the earlier pilot and before new evaluation; "
+                   "it is not a pre-pilot confirmatory split. Historical source-state identity: "
+                   f"{'verified' if verified else 'unavailable'}. Current LIBERO state hashes identify "
+                   "the new runs, and do not by themselves establish historical collection state bytes.\n")
+        if scores.get("scope", {}).get("state_identity_scope", {}).get("historical_runtime_flags_verified") is False:
+            report += ("\nHistorical batch size, padding, and KV-cache flags were not independently verified. "
+                       "The readout mapping uses explicit assumptions supported by the observed index structure "
+                       "and current collector code; runtime parity validates the current model execution only.\n")
     report += "\n## Paired signed effects\n\n| Feature | Pairs | Drop | CI low | CI high | Status |\n|---|---:|---:|---:|---:|---|\n"
     for row in analysis["feature_effects"]:
         report += (f"| {row['feature_id']} | {row['num_valid_pairs']} | {row['drop']} | "

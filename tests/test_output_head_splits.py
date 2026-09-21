@@ -28,6 +28,7 @@ def episode_source(tasks=2, trials=6):
 def spec(**overrides):
     return {"discovery_per_task": 3, "validation_per_task": 1,
             "evaluation_per_task": 2, "split_seed": 11,
+            "frozen_before_pilot": True,
             "evaluation_labels_previously_used": False, **overrides}
 
 
@@ -79,6 +80,26 @@ def test_late_split_freeze_does_not_qualify():
     result = build_split_manifest(episode_source(), spec(frozen_before_pilot=False))
     with pytest.raises(ValueError, match="before pilot"):
         validate_split_manifest(result, require_confirmatory=True)
+
+
+@pytest.mark.parametrize("explicit_null", [False, True])
+def test_unknown_freeze_history_is_not_invented(explicit_null):
+    settings = spec()
+    if explicit_null:
+        settings["frozen_before_pilot"] = None
+    else:
+        settings.pop("frozen_before_pilot")
+    result = build_split_manifest(episode_source(), settings)
+    assert result["frozen_before_pilot"] is None
+    validate_split_manifest(result)
+    with pytest.raises(ValueError, match="before pilot"):
+        validate_split_manifest(result, require_confirmatory=True)
+
+
+@pytest.mark.parametrize("value", [0, 1, "true", "false", [], {}])
+def test_freeze_history_requires_boolean_or_null(value):
+    with pytest.raises(ValueError, match="frozen_before_pilot"):
+        build_split_manifest(episode_source(), spec(frozen_before_pilot=value))
 
 
 def test_hash_detects_evaluation_reselection():
