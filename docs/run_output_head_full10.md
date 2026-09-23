@@ -250,33 +250,25 @@ raw 성공률이 낮은 task도 결과를 보고 제외하지 않는다. CI가 0
 
 ## 9. 종료 전 백업
 
-GitHub에는 코드/문서만, 원시 데이터·로컬 설정·결과는 private 저장소에 보관한다.
-먼저 run이 완료되거나 완전히 중단됐는지 확인한다. 쓰는 중인 파일을 archive하지 않는다.
+완료된 full10 실험은 **public Hugging Face dataset**
+[`jiyeony/event-sae-head-full10-results`](https://huggingface.co/datasets/jiyeony/event-sae-head-full10-results)에
+공개한다. 전체 조건의 원자료, 점수·분석, 실행 설정, 실제 실험 코드 revision과 검증·복구
+도구를 함께 보관한다. GPU 없이 내려받아 결과를 검사하고 읽을 수 있도록 준비한다.
+
+전체 명령은 **[Full10 공개·복구 안내](publish_output_head_full10_results.md)**를 따른다.
+실험과 분석이 완료된 뒤 백업 도구를 업데이트하고 실행한다.
 
 ```bash
-ARCHIVE=/workspace/full10-followup-v1-backup.tar.gz
-tar -C /workspace -czf "$ARCHIVE" event-sae-head-results/full10-followup-v1 head-inputs/full10 Event-SAE-Head/configs/local/head-full10.yaml
-sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
-HF_HUB_OFFLINE=0 hf auth login
+cd /workspace/Event-SAE-Head
+git pull --ff-only origin main
+python scripts/openvla/headbundle.py pack --workspace /workspace --output /workspace/full10-public-release-v1
+python scripts/openvla/headbundle.py verify --bundle /workspace/full10-public-release-v1
 ```
 
-토큰은 터미널의 숨겨진 입력창에만 입력한다. 채팅·Git·로그에 쓰지 않는다.
-공개 입력의 pinned revision은 코드에 있으므로 281 GiB 원본은 다시 업로드할 필요 없다.
-
-```bash
-export BACKUP_REPO=jiyeony/event-sae-head-full10-results
-HF_HUB_OFFLINE=0 python -c 'import os;from huggingface_hub import HfApi;HfApi().create_repo(os.environ["BACKUP_REPO"],repo_type="dataset",private=True,exist_ok=True)'
-HF_HUB_OFFLINE=0 python -c 'import os;from huggingface_hub import HfApi;assert HfApi().repo_info(os.environ["BACKUP_REPO"],repo_type="dataset").private,"STOP: backup repository is public"'
-HF_HUB_OFFLINE=0 hf upload "$BACKUP_REPO" "$ARCHIVE" full10-followup-v1-backup.tar.gz --repo-type dataset
-HF_HUB_OFFLINE=0 hf upload "$BACKUP_REPO" "${ARCHIVE}.sha256" full10-followup-v1-backup.tar.gz.sha256 --repo-type dataset
-HF_HUB_OFFLINE=0 hf download "$BACKUP_REPO" full10-followup-v1-backup.tar.gz --repo-type dataset --local-dir /workspace/head-backup-verify
-sha256sum "$ARCHIVE" /workspace/head-backup-verify/full10-followup-v1-backup.tar.gz
-```
-
-private 검사가 실패하면 업로드하지 않는다. **실제 원격 archive를 다시 받은 두 hash가
-일치한 뒤** Pod 종료를 판단한다.
-checksum 파일만 다운로드해서 비교하는 것보다 이 검증이 더 강하다.
-기존 pilot용 `headrestore.py`의 기본 checksum은 이 새 archive용이 아니므로 그대로 적용하지 않는다.
+이후 공개 안내의 **로그인 → 공개 여부 확인 → 업로드 → 공개 revision 고정 → 실제 원격
+archive 재다운로드·검사**를 마친 뒤 Pod을 종료한다. 기존 pilot용 `headrestore.py`는
+이번 bundle용 도구가 아니므로 적용하지 않는다. 281 GiB의 공개 원본 데이터·모델·SAE는
+중복 업로드하지 않고 원본 revision/hash를 참조한다. 기존 파일에 없는 영상은 생성되지 않는다.
 
 ## 10. Git 배포 및 검증 범위
 
