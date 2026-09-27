@@ -91,9 +91,7 @@ Head와 Event는 동일한 250개 discovery episode를 사용했다. 다만 Head
 | 저장소 | 역할 | 이번 Head 연구에서의 용도 |
 |---|---|---|
 | `event-sae-libero-spatial-tasks-0-1` … `8-9` | 원본 500회 수집을 2 task씩 나눈 5개 저장소. dense activation·index·action·영상 등 | Head 점수 계산과 기존 SAE의 기반 원본 |
-| [libero-spatial-openvla-rollouts-500](https://huggingface.co/datasets/jiyeony/libero-spatial-openvla-rollouts-500) | 위 5개를 task/episode/step 표와 영상으로 정리한 파생 데이터. 500 rollouts, 62,558 steps | 행동·영상 확인용. dense activation의 대체물이 아니며 `headfull download`의 별도 입력 다운로드 대상도 아님 |
 | [event-sae-libero-spatial-reproduction](https://huggingface.co/datasets/jiyeony/event-sae-libero-spatial-reproduction) | 기존 Baseline의 TopK SAE 활성·event·cluster·ranking·fidelity·대조/개입 검증 결과 | full10의 discovery-only Event score를 다시 계산할 때 TopK/event/cluster 입력 사용 |
-| [event-sae-head-pilot-results](https://huggingface.co/datasets/jiyeony/event-sae-head-pilot-results) | 초기 task 0·1, 4 case, 72-rollout pilot 백업 | 개발 이력. full10 열람에는 불필요. 기존 기록상 private, 현재 비로그인 API는 401 |
 | [event-sae-head-full10-results](https://huggingface.co/datasets/jiyeony/event-sae-head-full10-results) | **이번 10-task·3,600-rollout의 최종 공개 결과** | 결과 열람·백업 복구·저장된 성공률 하락 재확인에 필요한 저장소 |
 
 원본 5개: [0–1](https://huggingface.co/datasets/jiyeony/event-sae-libero-spatial-tasks-0-1),
