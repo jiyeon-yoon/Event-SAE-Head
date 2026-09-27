@@ -1,0 +1,125 @@
+{
+  "schema_version": "drvla_comparison_protocol_v1",
+  "decision_date": "2026-09-27",
+  "status": "comparison_rules_fixed_input_and_calibration_gates_open",
+  "interpretation": "retrospective_followup_not_preregistered_confirmation",
+  "executable_by_output_head_cli": false,
+  "automatic_download_training_or_rollout": false,
+  "question": "Does a Dr.VLA-statistics-based feature selector predict closed-loop single-feature ablation effects on this frozen OpenVLA/SAE better or worse than the existing selectors?",
+  "not_claimed": [
+    "literal reproduction of Dr.VLA's trained SAE or published classifier",
+    "generality or semantic interpretability established by success-rate drops",
+    "new model or original dataset collection required by this protocol"
+  ],
+  "frozen_existing_experiment": {
+    "model_revision": "962318cec55ac10993ff0f5f43eda9a270b4c873",
+    "model_code_revision": "47a0ec7fc4ec123775a391911046cf33cf9ed83f",
+    "experiment_code_revision": "8924a8d9b62edb16d261785cbc2124729017f2b1",
+    "sae_sha256": "18443083d320d2ad3c607431f307697639966ad92075bdfe031398557f3ba9d6",
+    "layer_idx": 31,
+    "dictionary_size": 32768,
+    "hf_results_revision": "69c33d6a943c253dc97cf9a3968095276f7e9540",
+    "archive_sha256": "07eeb5c182ee4e195eb526362db9232ae1717de4c94b9b6da2fd62ef288de8bc",
+    "split_manifest_hash": "14f2cb73a5224c030a312118a9b27b3b171921381df025b7b180d8a2ecfa0548",
+    "discovery_episodes": 250,
+    "task_ids": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    "original_plan_hash": "8c9bbba88dc17ae61d089d18f17d5d9936379a11d6303528e1ec3ae9c2ce92d3"
+  },
+  "temporal_cache": {
+    "source": "existing pinned dense tensors and complete forward index",
+    "episode_scope": "exact original 250 discovery identities only",
+    "time_scope": "all recorded consecutive policy decision steps, not the 8-step Head subsample",
+    "encoding": "frozen SAE FP32 encoding with original-forward grouping, following the existing readout parity protocol",
+    "token_scope": "seven final prediction readouts per decision step, dimension indices 0 through 6",
+    "temporal_latent": "arithmetic mean of the seven encoded readout vectors; encode first, aggregate second",
+    "retain": "all nonzero latents losslessly; no top64 truncation",
+    "missing_step_or_dimension": "fail_closed; never impute zero",
+    "grouping_or_checkpoint_mismatch": "fail_closed",
+    "declaration": "readout-based Dr.VLA-statistics adaptation, not the original mean-pooled-hidden SAE representation"
+  },
+  "drvla_source": {
+    "paper": "https://arxiv.org/html/2603.19183v2",
+    "sections": ["3.2", "3.3", "Appendix A.3", "Appendix B.1", "Appendix C"],
+    "statistics": [
+      "episode coverage: fraction of episodes with any positive temporal latent",
+      "mean onset count: hysteresis onset count, averaged over active episodes",
+      "mean activation magnitude: per-episode maximum, averaged over active episodes",
+      "relative run length: active-state timestep fraction divided by onset count, averaged over active episodes"
+    ],
+    "hysteresis": {
+      "initial_state": 0,
+      "turn_on_when": "temporal_latent > 0.1",
+      "turn_off_when": "temporal_latent == 0",
+      "otherwise": "keep previous state",
+      "reset_at_episode_boundary": true
+    },
+    "zero_onset_active_episode": "undefined relative run length; flag and exclude from combined classifier ranking rather than silently divide or impute",
+    "published_libero_coefficients_reference_only": {
+      "intercept": -4.2,
+      "episode_coverage": 1.8,
+      "mean_onset_count": 1.89,
+      "mean_episode_max_activation": 0.52,
+      "relative_run_length": -0.36
+    },
+    "unmodified_published_coefficients_as_main_baseline": false,
+    "reason": "SAE input normalization, token representation and latent magnitude scale differ; raw coefficient transfer is not a validated generality predictor"
+  },
+  "calibrated_comparator": {
+    "name": "drvla_statistics_readout_recalibrated_v1",
+    "status": "not_computed_requires_lossless_cache_and_independent_semantic_labels",
+    "labels": "general versus episode-specific/memorized, judged from discovery activation traces and videos; never from closed-loop drop labels",
+    "label_target": "30 unambiguous features, 15 per class, following discovery-only visual screening; fail gate if unavailable",
+    "exclude_previously_measured_features_from_classifier_fit": true,
+    "previously_measured_features": [2723, 2875, 3165, 4449, 5169, 7024, 13724, 14146, 18471, 22257, 22593, 24360, 24830, 25653, 28858, 30729],
+    "uncertain_label": "exclude and disclose; never infer from intervention success",
+    "judging": "labels must be produced without consulting Head-KL rank or outcome table; identify evaluator and report any inability to blind",
+    "model": "StandardScaler plus L2 logistic regression, C=1, solver=lbfgs, max_iter=1000, random_state=20260927",
+    "fit_scope": "scaler and classifier on the labeled calibration features only",
+    "generality_validation": "leave-one-feature-out diagnostics with scaler refit inside each fold; descriptive given small, visually selected calibration set",
+    "rank_by": "finite logistic decision function descending to avoid saturated probability ties",
+    "outcome_based_hyperparameter_tuning": false,
+    "declaration": "recalibrated statistics baseline; not the published classifier or an unbiased estimate of general-feature prevalence"
+  },
+  "selection": {
+    "universe": "original 32768 SAE feature IDs; unsupported or undefined temporal statistics explicitly excluded and counted",
+    "methods": ["event_aligned", "head_full_vocab_kl_fixed_prefix", "mean_readout_activation", "readout_activation_frequency", "mean_edit_norm", "full_vocab_argmax_flip_rate", "action_conditional_kl", "action_mass_abs_change", "conditional_action_argmax_flip", "drvla_statistics_readout_recalibrated_v1"],
+    "existing_score_vectors": "retain frozen vectors; do not overwrite or retrospectively optimize them",
+    "information_budget_disclosure": "existing Head samples 8 steps per episode while temporal Dr.VLA statistics require the whole sequence; same episodes does not mean equal step/token support or equal offline cost",
+    "top_k": 3,
+    "tie_break": "feature_id ascending",
+    "existing_16_feature_panel": "first analysis is restricted-panel and exploratory; no global superiority claim",
+    "new_top3_coverage": "report intersection and missing feature IDs against existing 16; never substitute measured lower-ranked features",
+    "rank_outcome_join": "feature_id and matching SAE/checkpoint/protocol hashes",
+    "no_new_ranking_based_on_existing_success_labels": true
+  },
+  "evaluation": {
+    "primary": "mean signed success-rate drop across each method's actual global Top-3, only when all three are measured under a matched protocol",
+    "secondary": ["Spearman on an explicitly named common measured panel", "per-task effects", "top-k overlap", "candidate coverage and offline computation costs"],
+    "paired_cases": "same task, exact initial state, seed and runtime protocol; raw and edit compared pairwise",
+    "uncertainty": "paired resampling of initial states within fixed tasks; preserve shared resample across features and methods; report fixed-panel scope",
+    "missing_candidate_outcomes": "unavailable, not zero; new rollout requires a separate costed plan and explicit approval",
+    "old_raw_reuse": "only with verified exact protocol compatibility; otherwise rerun raw/identity with new conditions",
+    "semantic_claim": "not supported by success-rate drops alone; requires separate phase/dose/matched-perturbation diagnostics"
+  },
+  "gates_and_decision": {
+    "current_stage": "stage1_offline_action_and_generality_comparators_only_no_new_rollouts",
+    "stage1_action_mapping": "verified_pinned_config_tokenizer_and_model_code_canonical_256_token_support_31744_through_31999",
+    "stage1_action_scores": "not_run_requires_restored_SAE_and_fresh_current_device_parity",
+    "stage1_comparison_implementation": "common_active_rank_correlations_and_actual_global_top3_coverage_missing_outcomes_unavailable",
+    "rank_reanalysis": "completed",
+    "existing_data_feasibility_audit": "completed; exact temporal metrics not available from the current short/truncated caches",
+    "reencode_existing_dense": "next bounded computational step; execution estimate and approval before large download/compute",
+    "drvla_temporal_metrics": "not_run",
+    "generality_calibration": "not_run",
+    "new_rollout": "not_authorized_by_this_document",
+    "recollect_now": false,
+    "retrain_openvla": false,
+    "retrain_sae_now": false,
+    "consider_new_data_when": [
+      "a separate clean, prospective validation is justified after the comparator is defined",
+      "existing pinned source tensors or forward mappings fail reconstruction/integrity checks"
+    ],
+    "clean_future_study": "save restorable initial-state bytes plus hashes, full runtime/checkpoint identity and seeds; split SAE fitting/discovery/final evaluation before fitting; freeze all ranks before new outcomes",
+    "legacy_limit_remains": "new hashes cannot attest to unrecorded historical collection states"
+  }
+}

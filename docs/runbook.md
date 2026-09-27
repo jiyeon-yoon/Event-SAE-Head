@@ -2,6 +2,7 @@
 
 연구 내용·결과·데이터별 역할은 [experiment.md](experiment.md)를 참고한다.
 **이미 완료된 결과만 확인하려면 A만 실행한다. GPU Pod을 새로 만들 필요가 없다.**
+Dr.VLA 후속 비교는 아래 D의 별도 규칙이다. 기존 B의 3,600회 실행을 다시 시작할 필요는 없다.
 
 ## A. 공개 결과 다운로드·검증·복구 — GPU 불필요
 
@@ -235,7 +236,337 @@ python "$CHECK/tools/headbundle.py" verify --bundle "$CHECK"
 `verified`와 plan의 조건/rollout 수가 일치한 뒤 HF revision을 보관한다.
 **그 밖에 필요한 Pod 파일까지 백업했다면 terminate해도 된다.**
 
-## D. 개발 점검·이전 기록
+## D. Dr.VLA 비교 점검과 후속 규칙
+
+### D1. 이번에 완료한 것과 결정
+
+- 기존 결과 재분석 완료: [요약과 수치](experiment.md#22-2026-09-27-사후-재분석-큰-신호를-고르는-것뿐인가).
+- Dr.VLA 원문과 저장 형식 대조, pinned 공개 파일 목록, 실제 TopK shard 1개 및
+  Head readout cache 14개(14,000 readout)를 CPU로 검사했다. 원본 해시를 검증했고
+  모델을 실행하거나 unrestricted pickle을 사용하지 않았다.
+- [입력 점검 기록](../research_metadata/drvla_feasibility_20260927.json)과
+  [비교 규칙 v1](../configs/research/openvla/drvla_comparison_protocol_v1.json)을 기록했다.
+- **전면 재수집·OpenVLA/SAE 재학습은 보류한다.** 기존 dense 데이터로 필요한 시계열을
+  만들 수 있는 경로가 있으므로, 먼저 그 경로의 계산량을 산정한다.
+
+현재 Head cache는 250개 episode에서 **각 8 step만** 남겼다. 연속 활성화 횟수와 지속 길이를
+그대로 계산할 수 없다. 별도 legacy TopK에는 전체 시계열이 있지만 token당 64개만 저장하며,
+BatchTopK의 원래 forward grouping과 lossless 지원을 보증하지 않는다.
+실제 Head cache에서 1,581/14,000 readout은 nonzero가 64개를 넘었고 최대 333개였다.
+TopK 첫 shard 표본에는 50,187개 token row 중 532개가 저장한 64개 모두 양수였다.
+이는 **누락된 값이 0이라는 보증이 없다는 점검 결과**이며 모든 legacy row가 틀렸다는 뜻이 아니다.
+첫 legacy shard와 Head 표본은 이번 점검에서 동일 token의 직접 대조 표본을 확보하지 못했다.
+
+기존 원본 dense 369개(약 280.85 GiB)와 index의 pinned remote inventory는 존재한다.
+그 전체 tensor의 재다운로드·재인코딩은 이번 점검에 포함되지 않았다.
+
+### D2. 고정한 비교 규칙
+
+이 파일은 연구 규칙이며 `output_head_sensitivity.py --config`로 실행하는 config가 아니다.
+과거 `rollout_plan.json`을 고치거나 기존 승인 hash로 새 실험을 실행하지 않는다.
+
+1. **연구 대상 고정:** 같은 OpenVLA checkpoint, Layer 31 SAE, 기존 discovery 250 episode와
+   feature ID를 사용한다. 기존 Head/Event 순위와 과거 결과는 수정하지 않는다.
+2. **시계열 재구성:** 원본 dense를 original-forward 단위로 기존 SAE에 통과시킨 뒤,
+   매 step의 7개 출력 readout latent를 평균한다. 모든 nonzero를 보존하고 step 누락은
+   오류로 처리한다. hidden을 먼저 mean-pool해 SAE에 넣는 것과 혼동하지 않는다.
+3. **Dr.VLA 기반 적용 버전:** 네 일반성 통계를 사용하되 `drvla_statistics_readout_recalibrated_v1`로
+   이름을 구분한다. 원 논문의 mean-pooled-hidden SAE나 분류기 전체를 재현했다는 주장은 하지 않는다.
+4. **스케일과 보정:** 현재 nonzero latent의 중앙값은 약 49.87이다(Head 표본 기준).
+   원 논문과 입력 정규화가 다르므로 공개 계수를 무검증 상태로 주 비교에 쓰지 않는다.
+   discovery 영상·활성 trace에서 일반적/episode-specific feature를 판정한 별도 라벨로
+   분류기를 보정한다. 이전 16개 평가 feature는 보정 학습에서 제외하고, 성공률·Head 순위를
+   라벨링이나 조정에 쓰지 않는다. 상세 라벨 목표와 고정 학습 설정은 JSON 규칙에 있다.
+   라벨을 확보하지 못하면 합성 점수를 만들어 대신하지 않고 이 단계에서 멈춘다.
+5. **선정:** Top-3, 동점 feature ID 오름차순. 기존 16개에서의 관계는 탐색적으로 먼저 보고한다.
+   새로운 전체 Top-3가 미평가 feature를 포함하면 누락으로 표시하고 다른 후보로 대체하지 않는다.
+6. **평가:** 동일 task/초기상태/seed/runtime의 paired 성공률 하락을 사용한다. 기존 결과 재사용은
+   동일 protocol 확인 시에만 허용한다. 실제 새 Top-3가 모두 측정된 경우에만 전체 Top-3 성능을 보고한다.
+7. **해석:** 기존 Head는 8 step, Dr.VLA 시계열은 전체 step이므로 입력 정보량·시간 비용 차이를
+   공개한다. 일반성 라벨링 비용도 포함한다. “성공률을 더 떨어뜨렸다”를 “더 해석 가능하다”로 바꾸지 않는다.
+
+위 보정 설정은 **이 프로젝트에서 고정한 적용 규칙**이며 Dr.VLA 원문의 학습 설정을
+그대로 옮겼다는 뜻이 아니다. 기존 성공률을 이미 본 뒤의 follow-up이므로 사전등록 확증 실험으로 부르지 않는다.
+
+### D3. 남은 일과 실행 경계
+
+| 단계 | 현재 상태 | 새 로봇 rollout 필요? |
+|---|---|---|
+| 변경량 재분석·입력 감사·비교 규칙 | 완료 | 아니오 |
+| 원본 dense → 전체 시계열 lossless latent | 미실행, 대용량 I/O 및 SAE 계산량 산정 필요 | 아니오 |
+| Dr.VLA 통계·일반성 라벨·보정된 순위 | 미실행 | 아니오 |
+| 기존 16개 결과와 연결 | Dr.VLA 순위 생성 후 가능 | 아니오 |
+| 새 상위 후보 검증 | 후보 누락 수에 따라 별도 비용·승인 계획 | 경우에 따라 필요 |
+
+**GPU Pod 생성, 281 GiB 자동 다운로드, 재수집, 재학습, 새 rollout은 이 문서만으로 실행하지 않는다.**
+필요한 offline 재인코딩도 단순 JSON 재분석과 달리 계산 비용이 발생할 수 있다.
+
+원본 tensor/forward mapping의 무결성 점검이 실패하거나 별도 prospective 검증의 필요성이
+명확해질 때 새 데이터 수집을 다시 판단한다. 새 검증에서는 복원 가능한 초기상태 데이터와 hash,
+seed·runtime·코드·모델 identity를 기록한다. SAE 학습/순위 계산/최종 평가를 먼저 분리한다.
+해시만으로 누락된 과거 수집 상태를 복원할 수 없으며, 기존 SAE를 고정한 독립 검증도 가능하다.
+OpenVLA 자체를 새로 학습할 필요는 없고 기존 팀 공용 데이터·SAE도 그대로 보존한다.
+
+출처: [Dr.VLA v2](https://arxiv.org/html/2603.19183v2) §3 및 부록 A–C.
+
+<a id="followup-all5"></a>
+
+## E. 추가 ablation ①~⑤ — 기존 SAE 고정, 별도 브랜치
+
+### E1. 보존 범위와 현재 개발 상태
+
+- 기존 실험 코드 기준: `81487a07509ee10433c41c19d4bbcd079b9a4968`.
+- 로컬 고정 태그: `freeze/head-before-drvla-20260927`.
+- 후속 브랜치: `research/drvla-followup`. 2026-09-28 사용자 승인으로 이 브랜치만 commit·push한다.
+  `main` 병합·갱신은 이번 승인 범위에 포함하지 않는다.
+- 기존 `event_sae/research/output_head`, OpenVLA runner/hook 및 원 결과는 수정하지 않는다.
+- 새 모듈은 `event_sae/research/head_followup`, 새 CLI는 `headfollowup.py`에만 추가한다.
+- 미커밋 파일은 Git 브랜치에 영구 저장된 것이 아니다. 미커밋 상태로 `main`을 오가며 작업하지 않는다.
+
+| 항목 | 로컬 구현 | 실제 입력/GPU에서 남은 일 |
+|---|---|---|
+| ① 변경량 대조 | 같은 hidden의 token row마다 anchor 제거 L2 크기로 다른 decoder/고정 Gaussian 방향 편집 및 새 hook | 새 조건의 실행·분석 연결, BF16 실현 변경량 오차 검증 |
+| ② 억제 강도 | 원 산술을 유지하는 `alpha=0, .5, .75, 1` kernel/hook | GPU 일치 검증 및 전체 조건 실행 |
+| ③ 행동 단계 | pre-action 대상 물체 상태에 따른 phase rule/gate/hook, 정보 없으면 오류 | LIBERO 물체별 관측 adapter, 영상 대조로 판별 기준 검증, 단계별 rollout |
+| ④ action-token | pinned tokenizer/policy 매핑 확인, 조건부 KL+확률 질량+argmax 점수 CLI, 비교 보고서 | 현재 GPU 수치 검증 및 실제 점수 계산 |
+| ⑤ Dr.VLA 기반 | 원본 dense→전체 readout latent CLI, 통계, 순위·성공률을 가린 검토 자료, 독립 라벨 보정·비교 CLI | 원본 복원/재인코딩, 영상 대조를 통한 실제 30개 라벨, 보정·순위 계산 |
+
+**단위 테스트 통과는 실제 SAE/모델 numerical parity 또는 로봇 성능 검증이 아니다.**
+2026-09-27 초기 core 개발 테스트 401개 통과 후, 1단계 CLI·안전장치 테스트 13개를 추가해
+로컬 전체 테스트 **414개 통과**(follow-up CPU 테스트 총 58개 포함).
+[개발·검증 기록](../research_metadata/head_followup_development_20260927.json)에 실제 완료/미완료를 구분했다.
+후속 [1단계 작업 기록](../research_metadata/head_stage1_development_20260927.json)에는 실제 복원·점검과
+아직 수행하지 않은 점수 계산을 따로 기록했다.
+현재 `headfollowup.py`에는 `run` 명령을 제공하지 않는다. 원 CLI의 고정 조건을 완화하거나
+옛 승인 hash로 새 조건을 실행하지 않는다. 새 결과는 별도 output에 저장한다.
+
+### E2. 전체 10-task 설계와 사전 비용
+
+설계 파일: [head_followup_all5.json](../configs/research/openvla/head_followup_all5.json).
+설계 확인은 GPU·모델·다운로드 없이 가능하다:
+
+```bash
+python scripts/openvla/headfollowup.py design
+```
+
+Anchor는 기존 Head-KL Top-3 `24830, 18471, 7024` 그대로다. 성공률 하락이 없었던
+`18471`도 유지한다. 기존 결과가 좋은 feature만 새로 골라 쓰지 않는다.
+다만 기존 결과를 본 후의 추가 검증이므로 사전등록 확증 연구로 부르지 않는다.
+
+| 조건 묶음 | 조건 수 | 조건당 평가 |
+|---|---:|---:|
+| raw + identity | 2 | 10 task × 20 초기상태 = 200 |
+| 기존 Head/Event Top-3 합집합의 완전 제거 | 5 | 200 |
+| anchor별 다른 SAE 방향 1 + Gaussian 방향 3 seed | 12 | 200 |
+| anchor별 25% 억제/50% 억제 (`alpha=.75/.5`) | 6 | 200 |
+| anchor별 접근/잡기/이동 단계에서만 완전 제거 | 9 | 200 |
+| action-KL/Dr.VLA의 실제 Top-3 중 위와 중복되지 않는 feature | 0~6 | 200 |
+| **합계** | **34~40** | **6,800~8,000 rollout** |
+
+이는 **실행 승인 예산이 아닌 설계 추정치**다. 옛 결과의 자동 재사용 없이 산정했다.
+기존 3,600회에서 기록된 40.877시간을 선형 환산하면 **77.2~90.8시간**이다.
+새 hook overhead·실패 episode 증가에 따라 더 걸릴 수 있으며, 이 범위는 시간 상한이 아니다.
+다운로드, 전체 시계열 재인코딩, 점수 계산, phase 보정, smoke/parity 실행은 포함하지 않는다.
+GPU 대여 단가를 정한 뒤 비용을 계산하고, 작은 작동 검사의 실측 속도로 다시 추정한다.
+기존 결과 재사용으로 줄일 경우에도 동일 초기상태·RNG·모델·SAE·환경·산술 및 raw action
+일치 검증을 먼저 통과해야 한다. 호환성이 확인되지 않은 old/new 결과를 섞지 않는다.
+
+### E3. 비교를 잘못 해석하지 않기 위한 규칙
+
+1. **변경량:** episode 평균이 아니라 같은 hidden의 각 row에서 anchor delta 크기를 맞춘다.
+   다른 SAE 방향은 자신의 활성값이 아니라 anchor의 활성 시점/크기를 빌린 방향 대조다.
+   BF16 cast 전 크기와 cast 후 실제 크기를 모두 기록한다. closed-loop 궤적이 달라지면
+   입력도 달라지므로 여러 조건의 누적 변경량이 같다고 주장하지 않는다.
+   detector/threshold/rank를 결과를 본 뒤 유리하게 조정하지 않는다.
+2. **강도:** `alpha`는 남기는 비율이다. `.75`는 25% 억제, `.5`는 50% 억제,
+   `0`은 완전 제거다. 실제 성공률이 반드시 단조 감소한다고 가정하지 않는다.
+3. **단계:** 단순 시간 3등분이나 baseline의 시간표를 현재 행동 단계라고 부르지 않는다.
+   현재 pre-action 관측의 대상 물체 거리/실제 grasp/placement 정보가 필요하다.
+   판별 규칙은 discovery/validation 영상과 대조하고, 평가 성공 여부로 튜닝하지 않는다.
+   단계가 발생하지 않은 episode도 전체 성공률 분모에 남기고, 개입 노출 횟수를 별도 보고한다.
+4. **action-token:** 올바른 token 집합을 policy/tokenizer에서 검증한다. subset 재정규화 KL은
+   행동 token 밖으로 확률이 새는 현상을 숨길 수 있어 subset 확률 질량 변화도 함께 보고한다.
+   이 점수도 fixed-prefix 지표이며, 물리적 행동 오차나 semantic interpretability 자체가 아니다.
+5. **일반성:** Dr.VLA의 통계를 우리 readout SAE에 적용한 비교군이다. 전체 연속 시점의
+   7개 latent를 encode 후 평균하며, 8개 시점 cache/Top64에서 없는 값을 0으로 메우지 않는다.
+   논문 계수를 그대로 쓰거나 성공률로 일반성 라벨을 만들지 않는다. 자세한 원문/보정 규칙은 D2.
+
+### E4. 오프라인 도구 — 입력 복원 후에만 사용
+
+다음은 **새 데이터를 수집하거나 SAE를 학습하는 명령이 아니다.** 원본 dense 데이터와
+기존 SAE·full10 config/split을 먼저 복원해야 한다. 현재 로컬에 전체 입력을 자동 다운로드하지 않는다.
+`head-full10.yaml`의 기존 경로는 read-only로 읽고 결과 경로를 바꾸지 않는다.
+
+계획만 확인 (`--execute`가 없으면 파일 접근/계산하지 않음):
+
+```bash
+python scripts/openvla/headfollowup.py temporal \
+  --config configs/local/head-full10.yaml \
+  --output /workspace/head-followup-v1/temporal
+```
+
+입력 검증·비용 확인 후 명시적으로 실행할 때:
+
+```bash
+python scripts/openvla/headfollowup.py temporal \
+  --config configs/local/head-full10.yaml \
+  --output /workspace/head-followup-v1/temporal \
+  --device cuda:0 --execute
+
+python scripts/openvla/headfollowup.py temporal-stats \
+  --cache /workspace/head-followup-v1/temporal \
+  --output /workspace/head-followup-v1/drvla-statistics.json
+```
+
+temporal output은 모든 시점의 **마지막 prediction readout**별 nonzero latent를 보존한다.
+모든 image/prompt token의 latent를 보존했다는 뜻은 아니다. 한 source shard씩 mmap하고
+latent를 작은 shard로 저장한다. 원본 content hash도 기록하지만, 과거 미기록 수집 상태가
+이것으로 증명되는 것은 아니다. 중간 실패한 출력 폴더를 자동 덮어쓰거나 자동 재실행하지 않는다.
+기존 Head cache와 겹치는 모든 readout의 nonzero ID·값이 재인코딩 결과와 정확히 일치하는지
+확인한다. 다른 GPU/라이브러리 등으로 달라지면 원인을 확인할 때까지 멈추며 임계값을 몰래 완화하지 않는다.
+
+`calibrate`는 실제 일반성 라벨이 준비된 후에만 사용한다. 라벨 JSON은
+`drvla_discovery_labels_v1`, `split_role=discovery`, `used_outcomes=false`,
+`used_head_rank=false`, `evaluator`, `statistics_sha256`, `labels`가 필요하다.
+각 label은 `feature_id`, `label`(`general`/`episode_specific`), `evidence`를 갖는다.
+15개씩 총 30개의 독립 라벨이 없으면 멈춘다. 테스트용 synthetic 라벨을 실제 라벨로 쓰지 않는다.
+
+```bash
+python scripts/openvla/headfollowup.py calibrate \
+  --statistics /workspace/head-followup-v1/drvla-statistics.json \
+  --labels /workspace/head-followup-v1/drvla-labels.json \
+  --output /workspace/head-followup-v1/drvla-scores.json
+```
+
+①②③의 rollout 실행 명령은 아직 제공하지 않는다. phase adapter·확장 hook의 runner 연결·실제 GPU 검증이
+완료된 뒤 새 조건표/예산/출력 디렉터리와 함께 별도로 만든다. 지금 원본 `run`을 재실행하지 않는다.
+
+<a id="stage1-offline"></a>
+
+### E5. 먼저 실행할 1단계 — ④·⑤만, 새 rollout 0회
+
+**현재 상태:** 실제 백업에서 필요한 36개 파일(약 2.22GB)을 새 로컬 분석 폴더로 복원하고
+해시 검증을 완료했다. pinned 모델 설정·tokenizer·코드로 action token 256개(ID 31744–31999)를
+확인했다. 기존 6개 지표의 비교도 다시 계산했다. **새 action-KL/Dr.VLA 점수 계산 완료를 뜻하지 않는다.**
+로컬에는 기존 SAE 및 원본 dense가 없고 GPU도 없다. 전체 dense는 약 281GiB라서 현재 로컬
+여유 공간(복원 후 약 82GiB)으로 전체 다운로드하지 않는다.
+
+후속 코드는 `research/drvla-followup` 브랜치에서 받는다. **기본 `main`을 clone하는 것만으로는
+이 후속 CLI를 받을 수 없다.** 원격 브랜치 게시를 확인한 뒤 새 RunPod에서는 아래처럼 받는다.
+
+```bash
+cd /workspace
+git clone --branch research/drvla-followup --single-branch https://github.com/jiyeon-yoon/Event-SAE-Head.git
+cd Event-SAE-Head
+git branch --show-current
+git rev-parse HEAD
+```
+
+이미 같은 이름의 폴더가 있다면 삭제하거나 덮어쓰지 말고 저장소 상태부터 확인한다.
+실행에 사용한 commit hash를 결과와 함께 기록한다. 9월 27일 개발 기록의 `commit/push=false`는
+당시 상태를 보존한 것이며, 현재 원격 게시 상태는 Git으로 확인한다.
+기존 결과를 원위치에 덮어쓰지 않는다. 여기서 `validate`는 저장된 입력에 대한 수치 검사이며
+LIBERO 로봇 rollout이나 새로운 수집·학습이 아니다. 다른 GPU에서는 옛 인증서를 재사용하지 않는다.
+
+#### 1. 백업·SAE·검증용 모델 복원
+
+아래는 기존 RunPod runtime 환경, 저장 공간이 충분한 새 서버, 저장소 루트에서 실행하는 명령이다.
+**실제 GPU에서 이 신규 전체 경로를 통과한 것은 아직 아니다.** 멈추면 gate를 우회하지 않는다.
+
+```bash
+STEP=/workspace/head-stage1-v1
+CLI=scripts/openvla/headfollowup.py
+mkdir -p "$STEP/mapping-source"
+
+hf download jiyeony/event-sae-head-full10-results experiment.tar.gz manifest.json --repo-type dataset --revision 69c33d6a943c253dc97cf9a3968095276f7e9540 --local-dir "$STEP/bundle"
+
+python "$CLI" stage1-restore --archive "$STEP/bundle/experiment.tar.gz" --manifest "$STEP/bundle/manifest.json" --output "$STEP/restored"
+REF="$STEP/restored/results/full10-followup-v1"
+
+hf download jiyeony/event-sae-openvla-libero-spatial-layer31-paper trainer_0/ae.pt trainer_0/config.json --revision adb776b08f5b8ec4ea67556cf3e3bc60d91d607a --local-dir "$STEP/sae"
+hf download openvla/openvla-7b-finetuned-libero-spatial --revision 962318cec55ac10993ff0f5f43eda9a270b4c873 --local-dir /workspace/head-inputs/openvla-spatial
+hf download openvla/openvla-7b configuration_prismatic.py modeling_prismatic.py processing_prismatic.py --revision 47a0ec7fc4ec123775a391911046cf33cf9ed83f
+```
+
+모델 전체 파일은 현재 환경의 **수치 검증** 때문에 필요하다. action scoring 자체는 복원된 head와
+readout, SAE만 사용한다. 다운로드가 offline 환경 변수로 막혀 있으면 해당 다운로드 명령에만
+`HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0`을 앞에 붙인다.
+
+#### 2. action token 매핑과 현재 GPU 검증
+
+```bash
+hf download openvla/openvla-7b-finetuned-libero-spatial config.json tokenizer.json --revision 962318cec55ac10993ff0f5f43eda9a270b4c873 --local-dir "$STEP/mapping-source"
+hf download openvla/openvla-7b modeling_prismatic.py --revision 47a0ec7fc4ec123775a391911046cf33cf9ed83f --local-dir "$STEP/mapping-source"
+
+python "$CLI" action-map --source "$STEP/mapping-source" --head-manifest "$REF/head/output_head_manifest.json" --output "$STEP/action-mapping.json"
+
+python "$CLI" stage1-setup --restored "$STEP/restored" --sae "$STEP/sae/trainer_0/ae.pt" --snapshot /workspace/head-inputs/openvla-spatial --output "$STEP/action-config"
+
+python scripts/openvla/output_head_sensitivity.py validate --config "$STEP/action-config/action-runtime.yaml" --allow-model-execution
+```
+
+기존 token KL과 같은 `KL(original || feature_removed)` 방향이다. 비교 token 집합은 encoder가
+표현하는 256개 token이며, native decoder가 모든 vocabulary ID를 clip하는 전체 정의역과는 다르다.
+끝점 token 일부는 같은 bin center로 decode된다. **물리적 action 분포의 KL이라고 부르지 않는다.**
+
+#### 3. ④ 계산 후 바로 비교
+
+```bash
+python "$CLI" action-score --config "$STEP/action-config/action-runtime.yaml" --reference-result "$REF" --mapping "$STEP/action-mapping.json" --output "$STEP/action-scores.json" --execute
+
+python "$CLI" compare --reference-result "$REF" --action-scores "$STEP/action-scores.json" --output "$STEP/comparison-action"
+```
+
+기존 14,000개 readout 및 SAE 원래-forward latent를 그대로 쓴다. 100개 readout마다 진행률을 출력한다.
+전체 vocabulary KL도 재계산해 이전 점수와의 최대 feature별 차이를 진단값으로 남긴다.
+다른 장치의 수치 차이는 보고하며, 다른 산술의 결과를 bit-identical로 주장하지 않는다.
+상위 feature가 기존 16개 평가 대상에 없으면 성공률 하락은 **미측정**이며 다른 feature로 대체하지 않는다.
+실제 score 실행 시간은 측정 후 기록한다. 6,800~8,000회/77~91시간은 이 단계의 예산이 아니다.
+
+#### 4. ⑤ 원본 재인코딩·통계
+
+④는 원본 dense 다운로드 없이 먼저 끝낼 수 있다. ⑤를 진행할 때만 충분한 별도 저장 공간을 확보해
+기존 pinned 원본을 복원·merge한다. 원본만 약 281GiB이며, 모델·archive·파생 cache 및 여유 공간이 추가로 필요하다.
+이미 merged dense가 있다면 download/merge 두 명령은 생략한다. 이 명령들은 새 rollout/학습을 하지 않는다.
+
+```bash
+HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python scripts/openvla/headfull.py download --execute
+python scripts/openvla/headfull.py merge
+
+DENSE=/workspace/event-sae-spatial-inputs/merged/sae_activations/post_mlp_residual
+python "$CLI" stage1-setup --restored "$STEP/restored" --sae "$STEP/sae/trainer_0/ae.pt" --snapshot /workspace/head-inputs/openvla-spatial --dense "$DENSE" --output "$STEP/temporal-config"
+
+python "$CLI" temporal --config "$STEP/temporal-config/temporal-input.yaml" --output "$STEP/temporal" --device cuda:0 --execute
+python "$CLI" temporal-stats --cache "$STEP/temporal" --output "$STEP/drvla-statistics.json"
+python "$CLI" label-packet --cache "$STEP/temporal" --statistics "$STEP/drvla-statistics.json" --output "$STEP/drvla-review.json"
+```
+
+원래 discovery 250개 episode의 **기록된 연속 시점 전체**가 대상이다. 기존 Head 시점과 겹치는
+nonzero ID·값이 정확히 일치해야 한다. 누락 시점·차원, 기존 latent와 불일치하면 중단한다.
+중간 실패 출력은 완성 cache로 취급하지 않는다. 8시점/Top64 cache를 완전한 시계열이라고 가정하지 않는다.
+
+#### 5. 일반성 라벨은 사람의 검토 후 보정
+
+`drvla-review.json`은 기존 평가 feature 16개를 제외한 후보 60개를 고정 seed로 선정하고,
+모든 discovery episode의 전체 활성 시계열·영상 식별자를 제공한다. Head 순위·성공률은 넣지 않는다.
+**영상 자체를 포함하지 않으므로** 원본 discovery 영상과 `source_run_id/task_id/task_episode_idx`를
+대조해서 검토한다. 활성 coverage만으로 일반성을 자동 판정하지 않는다.
+
+검토자는 `general`/`episode_specific`을 실제 의미·영상 근거로 판단하고, 불확실하면 제외한다.
+양쪽 15개씩 30개가 안 모이면 임의로 채우지 않고 후보 검토를 확장한다. 라벨 형식은 E4와 같다.
+`statistics_sha256`은 `sha256sum "$STEP/drvla-statistics.json"`으로 구한다.
+
+```bash
+python "$CLI" calibrate --statistics "$STEP/drvla-statistics.json" --labels "$STEP/drvla-labels.json" --output "$STEP/drvla-scores.json"
+python "$CLI" compare --reference-result "$REF" --action-scores "$STEP/action-scores.json" --drvla-scores "$STEP/drvla-scores.json" --output "$STEP/comparison-stage1"
+```
+
+최종 산출물은 `action-scores.json`, 전체 temporal cache, `drvla-statistics.json`,
+검토 자료·근거 라벨, `drvla-scores.json`, `comparison-stage1/{comparison.json,report.md}`다.
+이 결과를 보고 ①②의 새 rollout을 할지 판단한다. **이 단계가 끝나도 새 후보의 행동 효과나
+의미 있는 행동 feature라는 결론은 자동으로 생기지 않는다.**
+
+## F. 개발 점검·이전 기록
 
 ```bash
 git remote -v

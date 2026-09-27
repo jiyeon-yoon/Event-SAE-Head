@@ -1,0 +1,72 @@
+{
+  "schema_version": "head_stage1_development_status_v1",
+  "date": "2026-09-27",
+  "record_scope": "historical_precommit_development_snapshot; later_publication_does_not_rewrite_this_record",
+  "branch": "research/drvla-followup",
+  "frozen_baseline_commit": "81487a07509ee10433c41c19d4bbcd079b9a4968",
+  "commit_created": false,
+  "push_performed": false,
+  "original_numerical_source_changed": false,
+  "scope": "stage1_action_token_and_DrVLA_statistics_offline_comparison_only",
+  "executed_real_data_work": {
+    "source_hf_revision": "69c33d6a943c253dc97cf9a3968095276f7e9540",
+    "source_archive_sha256": "07eeb5c182ee4e195eb526362db9232ae1717de4c94b9b6da2fd62ef288de8bc",
+    "restored_files_hash_verified": 36,
+    "restored_bytes": 2216136795,
+    "frozen_head_readouts": 14000,
+    "action_mapping_source": "pinned_model_config_tokenizer_and_modeling_prismatic_code",
+    "action_token_count": 256,
+    "action_token_min": 31744,
+    "action_token_max": 31999,
+    "old_score_recomparison": {
+      "methods": 6,
+      "common_active_features": 6009,
+      "common_measured_features": 16,
+      "head_vs_edit_norm_spearman": 0.882316395143111,
+      "head_top3": [24830, 18471, 7024],
+      "head_top3_mean_drop": 0.525,
+      "edit_norm_top3": [13724, 18471, 25653],
+      "edit_norm_top3_mean_drop": 0.015,
+      "interpretation": "recomputed_old_results_not_new_action_or_generality_evidence"
+    }
+  },
+  "implementation": [
+    "allowlisted_digest_checked_selective_restore_without_mutating_original_archive",
+    "pinned_action_mapping_with_padded_vocabulary_and_endpoint_alias_documentation",
+    "separate_stage1_config_setup_and_fresh_runtime_parity_gate",
+    "action_score_CLI_with_fixed_prefix_KL_mass_flip_and_full_vocab_replay_diagnostic",
+    "discovery_only_lossless_temporal_cache_and_statistics_existing_core",
+    "seeded_blind_candidate_review_packet_without_Head_ranks_or_outcomes_or_invented_labels",
+    "generality_calibration_and_rank_coverage_comparison_CLI_no_missing_outcome_imputation"
+  ],
+  "tests": {
+    "command": "python -m pytest -q",
+    "passed": 414,
+    "seconds": 11.53,
+    "stage1_new_tests": 13,
+    "followup_total_tests": 58,
+    "scope": "CPU_toy_fixtures_not_real_GPU_validation",
+    "git_diff_check": "passed",
+    "frozen_numerical_sources_diff": "empty"
+  },
+  "not_executed": [
+    "actual_action_token_feature_scores",
+    "real_full_temporal_reencoding",
+    "independent_semantic_generality_labels",
+    "real_DrVLA_recalibrated_scores",
+    "GPU_runtime_parity_or_new_robot_rollouts"
+  ],
+  "execution_constraints": {
+    "GPU_available": false,
+    "local_exact_SAE_checkpoint_present": false,
+    "local_raw_dense_shards_present": 0,
+    "local_free_disk_gib_after_restore_approx": 82,
+    "full_raw_dense_gib_approx": 281,
+    "large_download_started": false,
+    "paid_cloud_provisioned": false,
+    "new_rollouts": 0,
+    "SAE_training": false,
+    "policy_training": false
+  },
+  "next": "restore_exact_SAE_and_policy_for_current_GPU_numerical_validation_then_action_score; raw_dense_download_only_for_subsequent_generality_step"
+}

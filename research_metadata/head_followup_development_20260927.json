@@ -1,0 +1,58 @@
+{
+  "schema_version": "head_followup_development_status_v1",
+  "date": "2026-09-27",
+  "record_scope": "historical_precommit_development_snapshot; later_publication_does_not_rewrite_this_record",
+  "branch": "research/drvla-followup",
+  "frozen_baseline_commit": "81487a07509ee10433c41c19d4bbcd079b9a4968",
+  "new_commit_created": false,
+  "push_performed": false,
+  "original_numerical_source_changed": false,
+  "scope": "all_five_ablation_core_development_not_completed_robot_experiments",
+  "software_validation": {
+    "command": "python -m pytest -q",
+    "passed": 401,
+    "new_followup_cpu_tests": 45,
+    "scientific_status": "synthetic_CPU_tests_not_GPU_parity_or_real_robot_results",
+    "git_diff_check": "passed",
+    "frozen_output_head_and_openvla_source_diff": "empty",
+    "environment_note": "local_anaconda_python_3.11_torch_2.2.2; tests_run_outside_macOS_sandbox_after_OpenMP_SHM_restriction"
+  },
+  "implemented": [
+    "residual_preserving_dose_and_same_hidden_per_row_norm_matched_direction_kernels",
+    "native_compatible_separate_followup_hook_with_explicit_context_and_phase_provider_requirement",
+    "physical_pre_action_phase_rule_with_no_time_thirds_fallback",
+    "conditional_action_token_KL_mass_diagnostics_and_bounded_readout_scoring_API",
+    "original_forward_lossless_temporal_latent_cache_CLI_from_existing_dense_activations",
+    "exact_frozen_Head_cache_overlap_check_during_reencoding",
+    "DrVLA_statistics_readout_adaptation_and_independent_label_calibration_API_CLI",
+    "nonexecuting_all5_condition_and_cost_design"
+  ],
+  "not_yet_done": [
+    "restoration_or_reencoding_of_real_full_dense_inputs",
+    "verified_action_token_mapping_and_action_score_CLI_integration",
+    "LIBERO_target_specific_physical_phase_observation_adapter_and_blind_video_validation",
+    "independent_generality_labels_and_real_DrVLA_scores",
+    "new_condition_rollout_execution_resume_and_paired_analysis_workflow",
+    "actual_GPU_numerical_parity_smoke_test_or_new_rollouts"
+  ],
+  "design_budget": {
+    "task_count": 10,
+    "cases_per_condition": 200,
+    "conditions_min": 34,
+    "conditions_max": 40,
+    "rollouts_min": 6800,
+    "rollouts_max": 8000,
+    "hours_linear_reference_min": 77.2123182243081,
+    "hours_linear_reference_max": 90.83802144036248,
+    "status": "estimate_not_execution_approval_or_runtime_bound",
+    "excludes": ["download", "offline_reencoding_and_scoring", "phase_calibration", "smoke_and_parity", "extra_hook_overhead"]
+  },
+  "execution": {
+    "GPU_used": false,
+    "cloud_provisioned": false,
+    "raw_dataset_downloaded": false,
+    "sae_retrained": false,
+    "policy_retrained": false,
+    "new_robot_rollouts": 0
+  }
+}
