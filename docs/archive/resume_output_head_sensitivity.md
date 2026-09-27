@@ -1,5 +1,7 @@
 # 출력층 민감도 실험 재시작 — 2026-09-21
 
+> 보관 문서 — 당시 재시작 계획이다. 현재 완료 결과는 [연구·결과](../experiment.md), 명령은 [실행·복구](../runbook.md)를 따른다.
+
 이전 RunPod은 종료됐다. 기존 2-task/4-case/72-rollout 결과는 보존하고,
 새 평가를 시작하기 전에 백업을 복구하고 discovery/evaluation 분리 경로를 준비한다.
 현재 로컬에서는 GPU나 Hugging Face 다운로드를 실행하지 않았다.

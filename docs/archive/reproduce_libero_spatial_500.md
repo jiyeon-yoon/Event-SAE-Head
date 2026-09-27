@@ -1,5 +1,7 @@
 # LIBERO-Spatial 500 재현
 
+> 보관 문서 — 당시 Baseline 안내다. 현재 Head 연구는 [연구·결과](../experiment.md)와 [실행·복구](../runbook.md)를 따른다.
+
 이 문서는 **기존 500 rollouts와 학습된 Layer 31 SAE를 내려받아 Baseline을
 검증하는 경로**다. 처음 실행하는 팀원은 이 경로부터 사용한다. Activation 수집과
 SAE 학습부터 다시 수행하려면 [OpenVLA 가이드](openvla.md)의 Phase 1을 따른다.

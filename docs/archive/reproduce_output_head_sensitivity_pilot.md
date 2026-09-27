@@ -1,5 +1,7 @@
 # OpenVLA 출력층 민감도 Pilot: RunPod 재현 기록
 
+> 보관 문서 — 72회 pilot의 역사적 기록이다. 현재 3,600회 결과는 [연구·결과](../experiment.md), 명령은 [실행·복구](../runbook.md)를 따른다.
+
 이 문서는 2026-09-20~21에 RTX 4090 RunPod에서 실제로 수행한
 Event-SAE output-head sensitivity pilot을 설명하고, 종료 전에 남긴 명령을
 재현 가능한 순서로 정리한다.

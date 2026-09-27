@@ -1,5 +1,7 @@
 # Event-SAE 출력층 민감도: 전체 10-task 실행 안내
 
+> 보관 문서 — 최초 실행 절차 기록이다. 최신 통합 안내는 [실행·복구](../runbook.md), 완료 결과는 [연구·결과](../experiment.md)를 따른다.
+
 작성: 2026-09-21. 대상 저장소는 **jiyeon-yoon/Event-SAE-Head**뿐이다.
 Baseline 및 다른 팀원 저장소는 변경하지 않는다.
 

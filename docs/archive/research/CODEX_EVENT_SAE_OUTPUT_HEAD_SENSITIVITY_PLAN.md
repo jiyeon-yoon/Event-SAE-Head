@@ -1,5 +1,7 @@
 ## Codex 구현 지시서: Event-SAE 출력층 민감도로 feature의 행동적 중요도 예측하기
 
+> 보관 문서 — 당시 설계와 구현 지시 기록이다. 현재 상태는 [연구·결과](../../experiment.md)와 [실행·복구](../../runbook.md)를 따른다.
+
 - 문서 버전: 1.1 / 2026-09-20
 - 개발 대상 저장소: `https://github.com/jiyeon-yoon/Event-SAE-Head` (public)
 - 기반 저장소: `https://github.com/jiyeon-yoon/Event-SAE-Baseline`

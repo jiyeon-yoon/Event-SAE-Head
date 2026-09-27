@@ -1,5 +1,7 @@
 # Full10 실험 결과를 Hugging Face에 공개하고 복구하기
 
+> 보관 문서 — 최초 공개 절차 기록이다. 현재 명령과 고정 공개 버전은 [실행·복구](../runbook.md)를 따른다.
+
 대상: 완료된 `full10-followup-v1` 실험. 공개 저장소는
 [jiyeony/event-sae-head-full10-results](https://huggingface.co/datasets/jiyeony/event-sae-head-full10-results)다.
 

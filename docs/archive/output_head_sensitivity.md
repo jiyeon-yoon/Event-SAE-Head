@@ -1,5 +1,7 @@
 # OpenVLA 출력층 민감도: 구현 및 실행 안내
 
+> 보관 문서 — 세부 CLI 구현 기록이다. 현재 시작점은 [연구·결과](../experiment.md)와 [실행·복구](../runbook.md)다.
+
 전체 10-task 후속 실행은 [현재 실행 안내](run_output_head_full10.md)를 따른다.
 
 ## 구현 범위와 현재 실행 상태

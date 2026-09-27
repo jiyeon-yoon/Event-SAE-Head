@@ -1,5 +1,7 @@
 # openVLA pipeline
 
+> 보관 문서 — 당시 Baseline 안내다. 현재 Head 연구는 [연구·결과](../experiment.md)와 [실행·복구](../runbook.md)를 따른다.
+
 Closed-loop interpretability pipeline for the openVLA backbone on the
 LIBERO simulation suites.
 
